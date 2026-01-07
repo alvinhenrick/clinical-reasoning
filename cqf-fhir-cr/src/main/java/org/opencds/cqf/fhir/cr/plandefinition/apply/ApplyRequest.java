@@ -16,9 +16,11 @@ import static org.opencds.cqf.fhir.utility.Parameters.newStringPart;
 
 import ca.uhn.fhir.context.FhirVersionEnum;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.hl7.fhir.instance.model.api.IBase;
 import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
 import org.hl7.fhir.instance.model.api.IBaseBundle;
@@ -28,8 +30,8 @@ import org.hl7.fhir.instance.model.api.IBaseOperationOutcome;
 import org.hl7.fhir.instance.model.api.IBaseParameters;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.instance.model.api.ICompositeType;
-import org.hl7.fhir.instance.model.api.IDomainResource;
 import org.hl7.fhir.instance.model.api.IIdType;
+import org.hl7.fhir.instance.model.api.IPrimitiveType;
 import org.opencds.cqf.cql.engine.model.ModelResolver;
 import org.opencds.cqf.fhir.cql.LibraryEngine;
 import org.opencds.cqf.fhir.cr.common.ICpgRequest;
@@ -37,8 +39,11 @@ import org.opencds.cqf.fhir.cr.common.IInputParameterResolver;
 import org.opencds.cqf.fhir.cr.questionnaire.generate.GenerateRequest;
 import org.opencds.cqf.fhir.cr.questionnaire.populate.PopulateRequest;
 import org.opencds.cqf.fhir.utility.Constants;
+import org.opencds.cqf.fhir.utility.Constants.SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE;
+import org.opencds.cqf.fhir.utility.adapter.IParametersParameterComponentAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IPlanDefinitionAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IQuestionnaireAdapter;
+import org.opencds.cqf.fhir.utility.adapter.IQuestionnaireItemComponentAdapter;
 
 public class ApplyRequest implements ICpgRequest {
     private static final String ACTIVITY_DEFINITION = "ActivityDefinition";
@@ -62,9 +67,11 @@ public class ApplyRequest implements ICpgRequest {
     private final Collection<IBaseResource> requestResources;
     private final Collection<IBaseResource> extractedResources;
     private IBaseOperationOutcome operationOutcome;
-    private IBaseResource questionnaire;
     private IQuestionnaireAdapter questionnaireAdapter;
     private Boolean containResources;
+    private Set<String> questionnaireDefinitions;
+    // actionId is used to ensure all actions have an Id so they can be mapped
+    private int actionId;
 
     public ApplyRequest(
             IBaseResource planDefinition,
@@ -120,6 +127,7 @@ public class ApplyRequest implements ICpgRequest {
         requestResources = new ArrayList<>();
         extractedResources = new ArrayList<>();
         containResources = false;
+        actionId = 0;
     }
 
     public ApplyRequest copy(IBaseResource planDefinition) {
@@ -140,7 +148,7 @@ public class ApplyRequest implements ICpgRequest {
                         libraryEngine,
                         modelResolver,
                         inputParameterResolver)
-                .setQuestionnaire(questionnaire)
+                .setQuestionnaire(getQuestionnaireAdapter())
                 .setContainResources(containResources);
     }
 
@@ -166,46 +174,73 @@ public class ApplyRequest implements ICpgRequest {
     public GenerateRequest toGenerateRequest(IBaseResource profile) {
         return new GenerateRequest(profile, false, true, libraryEngine, modelResolver)
                 .setReferencedLibraries(referencedLibraries)
-                .setQuestionnaire(questionnaire);
+                .setQuestionnaire(getQuestionnaire());
     }
 
     public PopulateRequest toPopulateRequest() {
         List<IBaseBackboneElement> context = new ArrayList<>();
+        if (getQuestionnaireAdapter() == null) {
+            return null;
+        }
         var launchContextExts =
                 getQuestionnaireAdapter().getExtensionsByUrl(Constants.SDC_QUESTIONNAIRE_LAUNCH_CONTEXT);
         launchContextExts.forEach(lc -> {
             var code = lc.getExtension().stream()
                     .map(c -> (IBaseExtension<?, ?>) c)
                     .filter(c -> c.getUrl().equals("name"))
-                    .map(c -> resolvePathString(c.getValue(), "code").toUpperCase())
+                    .map(c -> resolvePathString(c.getValue(), "code"))
                     .findFirst()
                     .orElse(null);
-            String value = null;
-            switch (Constants.SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE.valueOf(code)) {
-                case PATIENT:
-                    value = subjectId.getValue();
-                    break;
-                case ENCOUNTER:
-                    value = encounterId.getValue();
-                    break;
-                case USER:
-                    value = practitionerId.getValue();
-                    break;
-                default:
-                    break;
+            if (code != null) {
+                var valueParts = new ArrayList<IBase>();
+                valueParts.add(newStringPart(getFhirContext(), "name", code));
+                if (Arrays.stream(SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE.values())
+                        .map(Enum::toString)
+                        .toList()
+                        .contains(code.toUpperCase())) {
+                    String value = null;
+                    switch (SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE.valueOf(code.toUpperCase())) {
+                        case PATIENT:
+                            value = subjectId.getValue();
+                            break;
+                        case ENCOUNTER:
+                            value = encounterId.getValue();
+                            break;
+                        case USER:
+                            value = practitionerId.getValue();
+                            break;
+                        default:
+                            break;
+                    }
+                    if (value != null) {
+                        valueParts.add(newPart(getFhirContext(), "Reference", "content", value));
+                    }
+                } else if (parameters != null) {
+                    // Check parameters for any that match
+                    var paramsAdapter = getAdapterFactory().createParameters(parameters);
+                    if (paramsAdapter.hasParameter(code)) {
+                        paramsAdapter.getParameter().stream()
+                                .filter(p -> p.getName().equals(code))
+                                .filter(IParametersParameterComponentAdapter::hasResource)
+                                .forEach(p -> valueParts.add(newPart(getFhirContext(), "content", p.getResource())));
+                    }
+                }
+                if (!valueParts.isEmpty()) {
+                    context.add((IBaseBackboneElement)
+                            newPart(getFhirContext(), "context", valueParts.toArray(new IBase[0])));
+                }
             }
-            context.add((IBaseBackboneElement) newPart(
-                    getFhirContext(),
-                    "context",
-                    newStringPart(getFhirContext(), "name", code),
-                    newPart(getFhirContext(), "Reference", "content", value)));
         });
         return new PopulateRequest(
-                questionnaire, subjectId, context, null, parameters, data, libraryEngine, modelResolver);
+                questionnaireAdapter.get(), subjectId, context, null, data, libraryEngine, modelResolver);
     }
 
     public IBaseResource getPlanDefinition() {
         return planDefinitionAdapter.get();
+    }
+
+    public IPlanDefinitionAdapter getPlanDefinitionAdapter() {
+        return planDefinitionAdapter;
     }
 
     @Override
@@ -305,20 +340,36 @@ public class ApplyRequest implements ICpgRequest {
 
     @Override
     public IBaseResource getQuestionnaire() {
-        return questionnaire;
+        return questionnaireAdapter == null ? null : questionnaireAdapter.get();
     }
 
     @Override
     public IQuestionnaireAdapter getQuestionnaireAdapter() {
-        if (questionnaireAdapter == null && questionnaire != null) {
-            questionnaireAdapter = (IQuestionnaireAdapter)
-                    getAdapterFactory().createKnowledgeArtifactAdapter((IDomainResource) questionnaire);
-        }
         return questionnaireAdapter;
     }
 
+    @Override
+    public void addQuestionnaireItem(IQuestionnaireItemComponentAdapter item) {
+        if (questionnaireAdapter != null) {
+            questionnaireAdapter.addItem(item);
+            if (item.hasDefinition()) {
+                questionnaireDefinitions.add(item.getDefinition());
+            }
+        }
+    }
+
+    public boolean questionnaireItemExistsForProfile(IPrimitiveType<String> profile) {
+        return questionnaireDefinitions.contains(profile.getValueAsString());
+    }
+
     public ApplyRequest setQuestionnaire(IBaseResource questionnaire) {
-        this.questionnaire = questionnaire;
+        setQuestionnaire(questionnaire == null ? null : getAdapterFactory().createQuestionnaire(questionnaire));
+        return this;
+    }
+
+    public ApplyRequest setQuestionnaire(IQuestionnaireAdapter questionnaire) {
+        questionnaireAdapter = questionnaire;
+        questionnaireDefinitions = questionnaireAdapter == null ? null : questionnaireAdapter.getAllItemDefinitions();
         return this;
     }
 
@@ -454,5 +505,9 @@ public class ApplyRequest implements ICpgRequest {
         }
 
         return params;
+    }
+
+    public String getNextActionId() {
+        return "%s".formatted(actionId++);
     }
 }

@@ -13,13 +13,18 @@ import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
 import org.hl7.fhir.instance.model.api.IDomainResource;
 import org.hl7.fhir.r4.model.BooleanType;
 import org.hl7.fhir.r4.model.DateTimeType;
+import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.PrimitiveType;
+import org.hl7.fhir.r4.model.StringType;
+import org.hl7.fhir.r4.model.UsageContext;
 import org.hl7.fhir.r4.model.ValueSet;
 import org.hl7.fhir.r4.model.ValueSet.ConceptSetComponent;
 import org.hl7.fhir.r4.model.ValueSet.ValueSetExpansionComponent;
+import org.hl7.fhir.r4.model.ValueSet.ValueSetExpansionContainsComponent;
 import org.opencds.cqf.cql.engine.runtime.Code;
 import org.opencds.cqf.fhir.utility.adapter.DependencyInfo;
 import org.opencds.cqf.fhir.utility.adapter.IDependencyInfo;
+import org.opencds.cqf.fhir.utility.adapter.IUsageContextAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IValueSetAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IValueSetConceptSetAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IValueSetExpansionContainsAdapter;
@@ -85,6 +90,34 @@ public class ValueSetAdapter extends KnowledgeArtifactAdapter implements IValueS
     }
 
     @Override
+    public IValueSetAdapter addUseContext(IUsageContextAdapter usageContext) {
+        if (usageContext == null) return this;
+
+        // underlying ValueSet from this adapter
+        ValueSet vs = get();
+        if (vs == null) return this;
+
+        Object underlying = usageContext.get();
+        if (!(underlying instanceof UsageContext)) return this;
+        UsageContext incoming = (UsageContext) underlying;
+
+        List<UsageContext> existingUseContexts = vs.getUseContext();
+        if (existingUseContexts == null || existingUseContexts.isEmpty()) {
+            vs.addUseContext(incoming);
+            return this;
+        }
+
+        boolean alreadyExists =
+                existingUseContexts.stream().anyMatch(existing -> existing != null && existing.equalsDeep(incoming));
+
+        if (!alreadyExists) {
+            vs.addUseContext(incoming);
+        }
+
+        return this;
+    }
+
+    @Override
     public <T extends IBaseBackboneElement> void setExpansion(T expansion) {
         getValueSet().setExpansion((ValueSetExpansionComponent) expansion);
     }
@@ -106,10 +139,31 @@ public class ValueSetAdapter extends KnowledgeArtifactAdapter implements IValueS
     }
 
     @Override
+    public int getExpansionTotal() {
+        return getExpansion().getTotal();
+    }
+
+    @Override
     public List<IValueSetExpansionContainsAdapter> getExpansionContains() {
         return getExpansion().getContains().stream()
                 .map(ValueSetExpansionContainsAdapter::new)
                 .collect(Collectors.toUnmodifiableList());
+    }
+
+    @Override
+    public void appendExpansionContains(List<IValueSetExpansionContainsAdapter> expansionContains) {
+        getExpansion()
+                .getContains()
+                .addAll((expansionContains.stream()
+                        .map(e -> (ValueSetExpansionContainsComponent) e.get())
+                        .toList()));
+
+        var countParam = getExpansion().getParameter("count");
+        if (countParam != null) {
+            var count = ((IntegerType) countParam.getValue()).getValue();
+            count += expansionContains.size();
+            countParam.setValue(new IntegerType(count));
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -118,6 +172,25 @@ public class ValueSetAdapter extends KnowledgeArtifactAdapter implements IValueS
         var expansion = new ValueSet.ValueSetExpansionComponent(new DateTimeType(Date.from(Instant.now())));
         expansion.getContains();
         return expansion;
+    }
+
+    @Override
+    public void addExpansionStringParameter(String name, String value) {
+        getExpansion().addParameter().setName(name).setValue(new StringType(value));
+    }
+
+    @Override
+    public boolean hasExpansionStringParameter(String name, String value) {
+        if (!hasExpansion() || value == null) {
+            return false;
+        }
+
+        return getExpansion().getParameter().stream()
+                .filter(p -> name.equals(p.getName()))
+                .map(ValueSet.ValueSetExpansionParameterComponent::getValue)
+                .filter(v -> v instanceof org.hl7.fhir.instance.model.api.IPrimitiveType)
+                .map(v -> (org.hl7.fhir.instance.model.api.IPrimitiveType<?>) v)
+                .anyMatch(primitive -> value.equals(primitive.getValueAsString()));
     }
 
     @Override

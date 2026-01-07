@@ -9,6 +9,7 @@ import ca.uhn.fhir.rest.server.exceptions.NotImplementedOperationException;
 import ca.uhn.fhir.rest.server.exceptions.PreconditionFailedException;
 import ca.uhn.fhir.rest.server.exceptions.ResourceNotFoundException;
 import ca.uhn.fhir.rest.server.exceptions.UnprocessableEntityException;
+import ca.uhn.fhir.util.FhirTerser;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -43,6 +44,15 @@ import org.opencds.cqf.fhir.utility.client.TerminologyServerClientSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Main visitor/driver for the $release operation.
+ * <p>
+ * This visitor gathers dependencies for the artifact being released via {@link IDependencyInfo}.
+ * By contract, {@link IDependencyInfo#getReference()} is expected to represent a FHIR canonical reference
+ * (i.e., {@code url} or {@code url|version}) wherever the dependency can be resolved.
+ * Non-canonical references coming from adapters are resolved (when possible) and rewritten to canonical form;
+ * unresolved dependencies may remain non-canonical but are added as-is.
+ */
 public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
     private static final String NOT_SUPPORTED = " not supported";
     private Logger logger = LoggerFactory.getLogger(ReleaseVisitor.class);
@@ -281,14 +291,11 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
             // we trust in this case that the Endpoint URL matches up with the Authoritative Source in the ValueSet
             // if this assumption is faulty the only consequence is that the VSet doesn't get resolved
             latest = terminologyServerClient
-                    .getLatestNonDraftValueSetResource(endpoint, preReleaseReference)
+                    .getLatestValueSetResource(endpoint, preReleaseReference)
                     .map(r -> (IKnowledgeArtifactAdapter) createAdapterForResource(r));
         } else {
-            // get the latest ACTIVE version, if not fallback to the latest non-DRAFT version
-            latest = VisitorHelper.tryGetLatestVersionWithStatus(
-                            preReleaseReference, repository, Constants.STATUS_ACTIVE)
-                    .or(() -> VisitorHelper.tryGetLatestVersionExceptStatus(
-                            preReleaseReference, repository, Constants.STATUS_DRAFT));
+            // get the latest version - removed non-draft status requirement
+            latest = VisitorHelper.tryGetLatestVersion(preReleaseReference, repository);
         }
         return latest;
     }
@@ -339,7 +346,7 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
                 artifactAdapter.setRelatedArtifact(updatedRelatedArtifacts);
             }
 
-            var dependencies = artifactAdapter.getDependencies();
+            var dependencies = artifactAdapter.getDependencies(this.repository);
             // Step 2: update dependencies recursively
             for (var dependency : dependencies) {
                 IKnowledgeArtifactAdapter dependencyAdapter = null;
@@ -353,7 +360,13 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
                     if (maybeAdapter.isPresent()) {
                         dependencyAdapter = maybeAdapter.get();
                         alreadyUpdatedDependencies.put(dependencyAdapter.getUrl(), dependencyAdapter.get());
-                        var url = Canonicals.getUrl(dependencyAdapter.getUrl()) + "|" + dependencyAdapter.getVersion();
+                        var url = Canonicals.getUrl(dependencyAdapter.getUrl());
+                        // TODO: previously we were assuming a version exists - likely because we were only considering
+                        // non-draft resources. This will likely need work once requireVersionSpecificReferences is
+                        // supported...
+                        if (dependencyAdapter.hasVersion()) {
+                            url += "|" + dependencyAdapter.getVersion();
+                        }
                         var existingArtifactsForUrl =
                                 SearchHelper.searchRepositoryByCanonicalWithPaging(repository, url);
                         if (BundleHelper.getEntry(existingArtifactsForUrl).isEmpty()) {
@@ -383,6 +396,13 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
                 }
                 // only add the dependency to the manifest if it is from a leaf artifact
                 if (!artifactAdapter.getUrl().equals(rootAdapter.getUrl())) {
+                    // Safety net: warn if resolved dependency is not a canonical URL
+                    if (dependencyAdapter != null && Canonicals.getUrl(dependency.getReference()) == null) {
+                        logger.warn(
+                                "Resolved dependency reference does not appear to be a canonical URL (url or url|version): '{}', artifact URL: '{}'",
+                                dependency.getReference(),
+                                artifactAdapter.getUrl());
+                    }
                     var newDep = IKnowledgeArtifactAdapter.newRelatedArtifact(
                             fhirVersion(),
                             Constants.RELATEDARTIFACT_TYPE_DEPENDSON,
@@ -452,12 +472,13 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
                     tryFindLatestDependency(dependency.getReference(), resourceType, latestFromTxServer, endpoint);
 
             // Only add the expansion parameters entry for versionless references
-            maybeAdapter.ifPresent(iKnowledgeArtifactAdapter -> ((ILibraryAdapter) artifactBeingReleasedAdapter)
-                    .ensureExpansionParametersEntry(
-                            iKnowledgeArtifactAdapter,
-                            terminologyServerClient
-                                    .getTerminologyServerClientSettings()
-                                    .getCrmiVersion()));
+            if (maybeAdapter.isPresent() && artifactBeingReleasedAdapter instanceof ILibraryAdapter libraryAdapter) {
+                libraryAdapter.ensureExpansionParametersEntry(
+                        maybeAdapter.get(),
+                        terminologyServerClient
+                                .getTerminologyServerClientSettings()
+                                .getCrmiVersion());
+            }
         }
 
         return maybeAdapter;
@@ -465,12 +486,12 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
 
     private Optional<IKnowledgeArtifactAdapter> tryFindLatestDependency(
             String reference, String resourceType, boolean latestFromTxServer, IEndpointAdapter endpoint) {
-        Optional<IKnowledgeArtifactAdapter> maybeAdapter;
+        Optional<IKnowledgeArtifactAdapter> maybeAdapter = Optional.empty();
         // we trust in this case that the Endpoint URL matches up with the Authoritative Source in the ValueSet
         // if this assumption is faulty the only consequence is that the VSet doesn't get resolved
         if (resourceType != null && resourceType.equals(Constants.RESOURCETYPE_VALUESET) && latestFromTxServer) {
             maybeAdapter = terminologyServerClient
-                    .getLatestNonDraftValueSetResource(endpoint, reference)
+                    .getLatestValueSetResource(endpoint, reference)
                     .map(r -> (IKnowledgeArtifactAdapter) createAdapterForResource(r));
         } else if (resourceType != null
                 && resourceType.equals(Constants.RESOURCETYPE_CODESYSTEM)
@@ -479,10 +500,18 @@ public class ReleaseVisitor extends BaseKnowledgeArtifactVisitor {
                     .getCodeSystemResource(endpoint, reference)
                     .map(r -> (IKnowledgeArtifactAdapter) createAdapterForResource(r));
         } else {
-            // get the latest ACTIVE version, if not fallback to the latest non-DRAFT version
-            maybeAdapter = VisitorHelper.tryGetLatestVersionWithStatus(reference, repository, Constants.STATUS_ACTIVE)
-                    .or(() -> VisitorHelper.tryGetLatestVersionExceptStatus(
-                            reference, repository, Constants.STATUS_DRAFT));
+            if (resourceType == null) {
+                return maybeAdapter;
+            }
+            // TODO: this not bad... do a little better tho
+            var hasUrl = new FhirTerser(fhirContext())
+                    .fieldExists(
+                            "url",
+                            fhirContext().getResourceDefinition(resourceType).newInstance());
+            if (hasUrl) {
+                // get the latest version - removed non-draft status requirement
+                maybeAdapter = VisitorHelper.tryGetLatestVersion(reference, repository);
+            }
         }
         return maybeAdapter;
     }

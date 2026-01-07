@@ -1,6 +1,6 @@
 package org.opencds.cqf.fhir.cr.measure.r4;
 
-import static org.junit.Assert.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.LocalDate;
 import java.time.Month;
@@ -25,7 +25,12 @@ class MultiMeasureServiceTest {
                 .reportType("population")
                 .evaluate();
 
-        when.then().hasMeasureReportCount(2).report();
+        when.then()
+                // This is a population/summary report so we should have a single bundle containing
+                // all MeasureReports
+                .hasBundleCount(1)
+                .hasMeasureReportCount(2)
+                .report();
     }
 
     @Test
@@ -45,6 +50,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have a single bundle containing
+                // all MeasureReports
+                .hasBundleCount(1)
                 .hasMeasureReportCount(7)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -160,7 +168,7 @@ class MultiMeasureServiceTest {
                 .hasCount(2)
                 .up()
                 .population("measure-observation")
-                .hasCount(10)
+                .hasCount(8) // this is due to measurePopulation-Exclusion removed
                 .up()
                 .up()
                 .hasMeasureReportStatus(MeasureReportStatus.ERROR)
@@ -186,6 +194,40 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // MeasureDef assertions (pre-scoring) - verify internal state after processing
+                .defs()
+                .hasCount(7)
+                .byMeasureUrl("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
+                .first()
+                .hasNoErrors()
+                .firstGroup()
+                .population("initial-population")
+                .hasCount(10)
+                .up()
+                .population("denominator")
+                .hasCount(10)
+                .up()
+                .population("denominator-exclusion")
+                .hasCount(2)
+                .up()
+                .population("denominator-exception")
+                .hasCount(1)
+                .up()
+                .population("numerator-exclusion")
+                .hasCount(3)
+                .up()
+                .population("numerator")
+                .hasCount(7)
+                .up()
+                // TODO: Add score assertion in subsequent measure scoring refactoring PR
+                .up()
+                .up()
+                .up()
+                .up()
+                // MeasureReport assertions (post-scoring) - verify FHIR resource output
+                // This is a population/summary report so we should have a single bundle containing
+                // all MeasureReports
+                .hasBundleCount(1)
                 .hasMeasureReportCount(7)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -305,7 +347,7 @@ class MultiMeasureServiceTest {
                 .hasCount(2)
                 .up()
                 .population("measure-observation")
-                .hasCount(10);
+                .hasCount(8); // removed exclusions
     }
 
     @Test
@@ -325,6 +367,29 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // MeasureDef assertions (pre-scoring) - verify internal state after processing
+                .defs()
+                .hasCount(70)
+                .first()
+                .hasNoErrors()
+                .firstGroup()
+                .population("initial-population")
+                .hasCount(10)
+                .up()
+                .population("denominator")
+                .hasCount(10)
+                .up()
+                .population("numerator")
+                .hasCount(7)
+                .up()
+                // TODO: Add score assertion in subsequent measure scoring refactoring PR
+                .up()
+                .up()
+                .up()
+                // MeasureReport assertions (post-scoring) - verify FHIR resource output
+                // This is a subject/individual report so we should have one bundle per subject
+                // so 10 bundles
+                .hasBundleCount(10)
                 .hasMeasureReportCount(70)
                 .hasMeasureReportCountPerUrl(10, "http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasMeasureReportCountPerUrl(10, "http://example.com/Measure/MinimalProportionBooleanBasisSingleGroup")
@@ -364,6 +429,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a subject/individual report so we should have one bundle per subject
+                // the group resolves to 8 individual patient subjects, so 8 bundles
+                .hasBundleCount(8)
                 .hasMeasureReportCount(56)
                 .hasMeasureReportCountPerUrl(8, "http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasMeasureReportCountPerUrl(8, "http://example.com/Measure/MinimalProportionBooleanBasisSingleGroup")
@@ -395,6 +463,10 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a subject/individual report so we should have one bundle per subject
+                // so the group references a single practitioner which references a single patient,
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(7)
                 .hasMeasureReportCountPerUrl(1, "http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasMeasureReportCountPerUrl(1, "http://example.com/Measure/MinimalProportionBooleanBasisSingleGroup")
@@ -426,6 +498,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a subject/individual report so we should have one bundle per subject
+                // this practitioner resolves to only one patients, so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(7)
                 .hasMeasureReportCountPerUrl(1, "http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasMeasureReportCountPerUrl(1, "http://example.com/Measure/MinimalProportionBooleanBasisSingleGroup")
@@ -457,6 +532,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a subject/individual report so we should have one bundle per subject
+                // but we passed only one subject, so only one bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(7)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Individual")
@@ -615,6 +693,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a subject-list report so we should have one bundle per subject
+                // but we have only one subject, so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(7)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Subject List")
@@ -776,6 +857,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population report so we should have one bundle per subject
+                // so 1 bundle?
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -813,6 +897,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have one bundle per subject
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -833,6 +920,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have one bundle per subject
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -853,6 +943,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have one bundle per subject
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -879,6 +972,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have one bundle per subject
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -914,6 +1010,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have one bundle per subject
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")
@@ -951,6 +1050,9 @@ class MultiMeasureServiceTest {
                 .evaluate();
 
         when.then()
+                // This is a population/summary report so we should have one bundle per subject
+                // so 1 bundle
+                .hasBundleCount(1)
                 .hasMeasureReportCount(1)
                 .measureReport("http://example.com/Measure/MinimalProportionNoBasisSingleGroup")
                 .hasReportType("Summary")

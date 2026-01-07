@@ -6,7 +6,6 @@ import static org.opencds.cqf.fhir.cr.measure.constant.MeasureReportConstants.IM
 
 import ca.uhn.fhir.rest.server.exceptions.InvalidRequestException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import org.apache.commons.lang3.StringUtils;
 import org.hl7.fhir.dstu3.model.CodeableConcept;
@@ -18,6 +17,7 @@ import org.hl7.fhir.dstu3.model.Measure.MeasureGroupPopulationComponent;
 import org.hl7.fhir.dstu3.model.Measure.MeasureGroupStratifierComponent;
 import org.hl7.fhir.dstu3.model.Measure.MeasureSupplementalDataComponent;
 import org.hl7.fhir.dstu3.model.Resource;
+import org.opencds.cqf.fhir.cr.measure.MeasureStratifierType;
 import org.opencds.cqf.fhir.cr.measure.common.CodeDef;
 import org.opencds.cqf.fhir.cr.measure.common.ConceptDef;
 import org.opencds.cqf.fhir.cr.measure.common.GroupDef;
@@ -68,13 +68,18 @@ public class Dstu3MeasureDefBuilder implements MeasureDefBuilder<Measure> {
         for (MeasureGroupComponent group : measure.getGroup()) {
             // Populations
             List<PopulationDef> populations = new ArrayList<>();
+            var populationBasisDef = getPopulationBasisDef(measureBasis);
             for (MeasureGroupPopulationComponent pop : group.getPopulation()) {
                 checkId(pop);
                 var populationType = MeasurePopulationType.fromCode(
                         pop.getCode().getCodingFirstRep().getCode());
 
                 populations.add(new PopulationDef(
-                        pop.getId(), conceptToConceptDef(pop.getCode()), populationType, pop.getCriteria()));
+                        pop.getId(),
+                        conceptToConceptDef(pop.getCode()),
+                        populationType,
+                        pop.getCriteria(),
+                        populationBasisDef));
             }
 
             // Stratifiers
@@ -85,7 +90,9 @@ public class Dstu3MeasureDefBuilder implements MeasureDefBuilder<Measure> {
                         mgsc.getId(),
                         null, // No code on stratifier
                         // in dstu3
-                        mgsc.getCriteria());
+                        mgsc.getCriteria(),
+                        // There's no such thing as a stratifier component in DSTU3, so hard-code to VALUE
+                        MeasureStratifierType.VALUE);
 
                 stratifiers.add(stratifierDef);
             }
@@ -97,26 +104,11 @@ public class Dstu3MeasureDefBuilder implements MeasureDefBuilder<Measure> {
                     measureScoring,
                     false, // no group scoring
                     getImprovementNotation(measureImpNotation),
-                    getPopulationBasisDef(measureBasis));
+                    populationBasisDef);
             groups.add(groupDef);
         }
 
-        return new MeasureDef(measure.getId(), measure.getUrl(), measure.getVersion(), groups, sdes);
-    }
-
-    private PopulationDef checkPopulationForCode(
-            List<PopulationDef> populations, MeasurePopulationType measurePopType) {
-        return populations.stream()
-                .filter(e -> e.code().first().code().equals(measurePopType.toCode()))
-                .findAny()
-                .orElse(null);
-    }
-
-    private ConceptDef totalConceptDefCreator(MeasurePopulationType measurePopulationType) {
-        return new ConceptDef(
-                Collections.singletonList(
-                        new CodeDef(measurePopulationType.getSystem(), measurePopulationType.toCode())),
-                null);
+        return new MeasureDef(measure.getIdElement(), measure.getUrl(), measure.getVersion(), groups, sdes);
     }
 
     private ConceptDef conceptToConceptDef(CodeableConcept codeable) {
@@ -138,13 +130,13 @@ public class Dstu3MeasureDefBuilder implements MeasureDefBuilder<Measure> {
 
     private void checkId(Element e) {
         if (e.getId() == null || StringUtils.isBlank(e.getId())) {
-            throw new NullPointerException("id is required on all Elements of type: " + e.fhirType());
+            throw new InvalidRequestException("id is required on all Elements of type: " + e.fhirType());
         }
     }
 
     private void checkId(Resource r) {
         if (r.getId() == null || StringUtils.isBlank(r.getId())) {
-            throw new NullPointerException("id is required on all Resources of type: " + r.fhirType());
+            throw new InvalidRequestException("id is required on all Resources of type: " + r.fhirType());
         }
     }
 

@@ -1,6 +1,5 @@
 package org.opencds.cqf.fhir.utility.adapter;
 
-import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toMap;
 import static org.opencds.cqf.fhir.utility.adapter.IAdapter.newDateTimeType;
 import static org.opencds.cqf.fhir.utility.adapter.IAdapter.newDateType;
@@ -71,7 +70,7 @@ public interface IKnowledgeArtifactAdapter extends IResourceAdapter {
     }
 
     default void setTitle(String title) {
-        getModelResolver().setValue(get(), "title", title);
+        getModelResolver().setValue(get(), "title", newStringType(get().getStructureFhirVersionEnum(), title));
     }
 
     default String getDescriptor() {
@@ -118,6 +117,11 @@ public interface IKnowledgeArtifactAdapter extends IResourceAdapter {
     }
 
     List<IDependencyInfo> getDependencies();
+
+    default List<IDependencyInfo> getDependencies(IRepository repository) {
+        // TODO: this should be smarter
+        return getDependencies();
+    }
 
     default String getReferenceSource() {
         return hasVersion() ? getUrl() + "|" + getVersion() : getUrl();
@@ -272,13 +276,6 @@ public interface IKnowledgeArtifactAdapter extends IResourceAdapter {
         return !getRelatedArtifact().isEmpty();
     }
 
-    @SuppressWarnings("unchecked")
-    default <T extends ICompositeType & IBaseHasExtensions> List<T> getRelatedArtifact() {
-        return resolvePathList(get(), "relatedArtifact").stream()
-                .map(r -> (T) r)
-                .collect(Collectors.toList());
-    }
-
     default <T extends ICompositeType & IBaseHasExtensions> void addRelatedArtifact(T relatedArtifact) {
         try {
             getModelResolver().setValue(get(), "relatedArtifact", List.of(relatedArtifact));
@@ -370,12 +367,16 @@ public interface IKnowledgeArtifactAdapter extends IResourceAdapter {
                 .collect(toMap(IKnowledgeArtifactAdapter::getName, l -> l));
     }
 
-    @SuppressWarnings("unchecked")
     default Map<String, String> resolveCqfLibraries() {
         return getExtension().stream()
-                .filter(e -> e.getUrl().equals(Constants.CQF_LIBRARY))
-                .map(e -> ((IPrimitiveType<String>) e.getValue()).getValue())
-                .collect(Collectors.toMap(l -> requireNonNull(Canonicals.getIdPart(l)), l -> l));
+                .filter(e -> Constants.CQF_LIBRARY.equals(e.getUrl()))
+                .map(e -> e.getValue())
+                .filter(IPrimitiveType.class::isInstance)
+                .map(IPrimitiveType.class::cast)
+                .map(IPrimitiveType::getValueAsString)
+                .map(l -> Map.entry(Canonicals.getIdPart(l), l))
+                .filter(e -> e.getKey() != null)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     String VALID_RELATED_ARTIFACT = "Must be a valid RelatedArtifact";

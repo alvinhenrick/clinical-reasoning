@@ -155,6 +155,24 @@ class CliTest {
     }
 
     @Test
+    void r4WithOutputPath() {
+        var outputPath = Path.of(testResultsPath, "TestFHIR");
+        String[] args = new String[] {
+            "cql",
+            "-source=" + testResourcePath + "/r4/input/cql",
+            "-name=TestFHIR",
+            "-data=" + testResourcePath + "/r4",
+            "-c=Patient",
+            "-cv=example",
+            "--output-path=" + outputPath.toString()
+        };
+
+        Main.run(args);
+
+        assertTrue(outputPath.toFile().isDirectory());
+    }
+
+    @Test
     void r4WithHelpers() {
         String[] args = new String[] {
             "cql",
@@ -568,7 +586,6 @@ class CliTest {
             "-cv=123",
             "-c=Patient",
             "-cv=456",
-            "--measure-path=" + testResourcePath + "/compartment/input/resources/measure/",
             "--measure=%s".formatted(measureId),
             "--output-path=" + Path.of(testResultsPath, libraryName, TXTRESULTS_FOLDER),
             "--report-path=" + Path.of(testResultsPath, libraryName, MEASUREREPORTS_FOLDER),
@@ -613,7 +630,7 @@ class CliTest {
             "-cv=123",
             "-c=Patient",
             "-cv=456",
-            "--measure-path=" + testResourcePath + "/compartment/input/resources/measure/",
+            "--apply-scoring=false",
             "--measure=%s".formatted(measureId),
         };
 

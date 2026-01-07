@@ -1,30 +1,36 @@
 package org.opencds.cqf.fhir.utility.adapter.r5;
 
-import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.context.FhirVersionEnum;
 import java.util.List;
 import java.util.stream.Collectors;
-import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
+import org.hl7.fhir.instance.model.api.IBase;
+import org.hl7.fhir.instance.model.api.IBaseDatatype;
+import org.hl7.fhir.instance.model.api.IBaseHasExtensions;
+import org.hl7.fhir.instance.model.api.ICompositeType;
+import org.hl7.fhir.instance.model.api.IPrimitiveType;
 import org.hl7.fhir.r5.model.PlanDefinition.PlanDefinitionActionComponent;
-import org.opencds.cqf.cql.engine.model.ModelResolver;
+import org.hl7.fhir.r5.model.PlanDefinition.PlanDefinitionActionConditionComponent;
+import org.hl7.fhir.r5.model.PlanDefinition.PlanDefinitionActionInputComponent;
+import org.hl7.fhir.r5.model.PlanDefinition.PlanDefinitionActionRelatedActionComponent;
+import org.hl7.fhir.r5.model.RequestOrchestration.RequestOrchestrationActionComponent;
+import org.opencds.cqf.fhir.utility.adapter.BaseAdapter;
+import org.opencds.cqf.fhir.utility.adapter.ICodeableConceptAdapter;
+import org.opencds.cqf.fhir.utility.adapter.IDataRequirementAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IPlanDefinitionActionAdapter;
+import org.opencds.cqf.fhir.utility.adapter.IRequestActionAdapter;
 import org.opencds.cqf.fhir.utility.adapter.ITriggerDefinitionAdapter;
-import org.opencds.cqf.fhir.utility.model.FhirModelResolverCache;
 
-public class PlanDefinitionActionAdapter implements IPlanDefinitionActionAdapter {
+public class PlanDefinitionActionAdapter extends BaseAdapter implements IPlanDefinitionActionAdapter {
 
     private final PlanDefinitionActionComponent action;
-    private final FhirContext fhirContext;
-    private final ModelResolver modelResolver;
 
-    public PlanDefinitionActionAdapter(IBaseBackboneElement action) {
+    public PlanDefinitionActionAdapter(IBase action) {
+        super(FhirVersionEnum.R5, action);
         if (!(action instanceof PlanDefinitionActionComponent)) {
             throw new IllegalArgumentException(
                     "object passed as action argument is not a PlanDefinitionActionComponent data type");
         }
         this.action = (PlanDefinitionActionComponent) action;
-        fhirContext = FhirContext.forR5Cached();
-        modelResolver = FhirModelResolverCache.resolverForVersion(FhirVersionEnum.R5);
     }
 
     @Override
@@ -33,13 +39,78 @@ public class PlanDefinitionActionAdapter implements IPlanDefinitionActionAdapter
     }
 
     @Override
-    public FhirContext fhirContext() {
-        return fhirContext;
+    public boolean hasId() {
+        return get().hasId();
     }
 
     @Override
-    public ModelResolver getModelResolver() {
-        return modelResolver;
+    public String getId() {
+        return get().getId();
+    }
+
+    @Override
+    public boolean hasTitle() {
+        return get().hasTitle();
+    }
+
+    @Override
+    public String getTitle() {
+        return get().getTitle();
+    }
+
+    @Override
+    public boolean hasDescription() {
+        return get().hasDescription();
+    }
+
+    @Override
+    public String getDescription() {
+        return get().getDescription();
+    }
+
+    @Override
+    public boolean hasTextEquivalent() {
+        return get().hasTextEquivalent();
+    }
+
+    @Override
+    public String getTextEquivalent() {
+        return get().getTextEquivalent();
+    }
+
+    @Override
+    public boolean hasPriority() {
+        return get().hasPriority();
+    }
+
+    @Override
+    public String getPriority() {
+        if (hasPriority()) {
+            return get().getPriority().toCode();
+        } else {
+            return null;
+        }
+    }
+
+    @Override
+    public boolean hasCode() {
+        return get().hasCode();
+    }
+
+    @Override
+    public ICodeableConceptAdapter getCode() {
+        return getAdapterFactory().createCodeableConcept(get().getCode());
+    }
+
+    @Override
+    public boolean hasDocumentation() {
+        return get().hasDocumentation();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T extends ICompositeType & IBaseHasExtensions> List<T> getDocumentation() {
+        return get().getDocumentation().stream().map(d -> (T) d).toList();
     }
 
     @Override
@@ -54,6 +125,104 @@ public class PlanDefinitionActionAdapter implements IPlanDefinitionActionAdapter
 
     @Override
     public List<String> getTriggerType() {
-        return get().getTrigger().stream().map(t -> t.getType().toCode()).collect(Collectors.toUnmodifiableList());
+        return get().getTrigger().stream().map(t -> t.getType().toCode()).toList();
+    }
+
+    @Override
+    public boolean hasCondition() {
+        return get().hasCondition();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public List<PlanDefinitionActionConditionComponent> getCondition() {
+        return get().getCondition();
+    }
+
+    @Override
+    public boolean hasInput() {
+        return get().hasInput();
+    }
+
+    @Override
+    public List<IDataRequirementAdapter> getInputDataRequirement() {
+        return get().getInput().stream()
+                .filter(PlanDefinitionActionInputComponent::hasRequirement)
+                .map(PlanDefinitionActionInputComponent::getRequirement)
+                .map(getAdapterFactory()::createDataRequirement)
+                .toList();
+    }
+
+    @Override
+    public boolean hasRelatedAction() {
+        return get().hasRelatedAction();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public List<PlanDefinitionActionRelatedActionComponent> getRelatedAction() {
+        return get().getRelatedAction();
+    }
+
+    @Override
+    public boolean hasTiming() {
+        return get().hasTiming();
+    }
+
+    @Override
+    public IBaseDatatype getTiming() {
+        return get().getTiming();
+    }
+
+    @Override
+    public boolean hasType() {
+        return get().hasType();
+    }
+
+    @Override
+    public ICodeableConceptAdapter getType() {
+        return getAdapterFactory().createCodeableConcept(get().getType());
+    }
+
+    @Override
+    public boolean hasSelectionBehavior() {
+        return get().hasSelectionBehavior();
+    }
+
+    @Override
+    public String getSelectionBehavior() {
+        if (hasSelectionBehavior()) {
+            return get().getSelectionBehavior().toCode();
+        } else {
+            return null;
+        }
+    }
+
+    @Override
+    public boolean hasDefinition() {
+        return get().hasDefinition();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public IPrimitiveType<String> getDefinition() {
+        return (IPrimitiveType<String>) get().getDefinition();
+    }
+
+    @Override
+    public boolean hasAction() {
+        return get().hasAction();
+    }
+
+    @Override
+    public List<IPlanDefinitionActionAdapter> getAction() {
+        return get().getAction().stream()
+                .map(getAdapterFactory()::createPlanDefinitionAction)
+                .toList();
+    }
+
+    @Override
+    public IRequestActionAdapter newRequestAction() {
+        return getAdapterFactory().createRequestAction(new RequestOrchestrationActionComponent());
     }
 }

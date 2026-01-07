@@ -11,11 +11,11 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.server.exceptions.UnprocessableEntityException;
 import java.time.LocalDate;
 import java.util.Date;
 import java.util.List;
-import org.hl7.fhir.instance.model.api.IDomainResource;
 import org.hl7.fhir.r4.model.ElementDefinition.ElementDefinitionBindingComponent;
 import org.hl7.fhir.r4.model.Enumerations.PublicationStatus;
 import org.hl7.fhir.r4.model.Expression;
@@ -25,17 +25,20 @@ import org.hl7.fhir.r4.model.RelatedArtifact;
 import org.hl7.fhir.r4.model.StructureDefinition;
 import org.junit.jupiter.api.Test;
 import org.opencds.cqf.fhir.utility.Constants;
+import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
 import org.opencds.cqf.fhir.utility.adapter.IStructureDefinitionAdapter;
+import org.opencds.cqf.fhir.utility.adapter.IStructureDefinitionAdapterTest;
 import org.opencds.cqf.fhir.utility.adapter.TestVisitor;
 
-class StructureDefinitionAdapterTest {
+class StructureDefinitionAdapterTest implements IStructureDefinitionAdapterTest<StructureDefinition> {
     private final org.opencds.cqf.fhir.utility.adapter.IAdapterFactory adapterFactory = new AdapterFactory();
+    private final FhirContext fhirContext = FhirContext.forR4Cached();
 
     @Test
     void invalid_object_fails() {
         var library = new Library();
         assertThrows(IllegalArgumentException.class, () -> new StructureDefinitionAdapter(library));
-        assertNotNull(new StructureDefinitionAdapter((IDomainResource) new StructureDefinition()));
+        assertNotNull(adapterFactory.createStructureDefinition(new StructureDefinition()));
     }
 
     @Test
@@ -193,13 +196,44 @@ class StructureDefinitionAdapterTest {
 
     @Test
     void adapter_get_elements() {
-        var structureDef = new StructureDefinition();
-        structureDef.getDifferential().addElement().addType().setCode("String");
-        structureDef.getDifferential().addElement().addType().setCode("Quantity");
+        var baseDefinition = "http://hl7.org/fhir/Observation";
+        var structureDef = new StructureDefinition().setBaseDefinition(baseDefinition);
+        structureDef.getSnapshot().addElement().setPath("Observation");
+        structureDef.getSnapshot().addElement().setPath("Observation.id");
+        structureDef.getDifferential().addElement().setPath("Observation");
+        structureDef
+                .getDifferential()
+                .addElement()
+                .setPath("Observation.code")
+                .addType()
+                .setCode("String");
+        structureDef
+                .getDifferential()
+                .addElement()
+                .setPath("Observation.value")
+                .addType()
+                .setCode("Quantity");
         var adapter = (IStructureDefinitionAdapter) adapterFactory.createKnowledgeArtifactAdapter(structureDef);
+        assertTrue(adapter.hasSnapshot());
+        assertEquals(baseDefinition, adapter.getBaseDefinition().getValue());
         var snapshotElements = adapter.getSnapshotElements();
-        assertEquals(0, snapshotElements.size());
+        assertEquals(1, snapshotElements.size());
         var differentialElements = adapter.getDifferentialElements();
         assertEquals(2, differentialElements.size());
+    }
+
+    @Override
+    public Class<StructureDefinition> structureDefinitionClass() {
+        return StructureDefinition.class;
+    }
+
+    @Override
+    public FhirContext fhirContext() {
+        return fhirContext;
+    }
+
+    @Override
+    public IAdapterFactory getAdapterFactory() {
+        return adapterFactory;
     }
 }

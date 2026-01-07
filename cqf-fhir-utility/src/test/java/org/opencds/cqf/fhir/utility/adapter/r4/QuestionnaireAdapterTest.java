@@ -10,10 +10,12 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.server.exceptions.UnprocessableEntityException;
 import java.time.LocalDate;
 import java.util.Date;
 import java.util.List;
+import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
 import org.hl7.fhir.r4.model.CanonicalType;
 import org.hl7.fhir.r4.model.Enumerations.PublicationStatus;
 import org.hl7.fhir.r4.model.Expression;
@@ -21,14 +23,18 @@ import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Library;
 import org.hl7.fhir.r4.model.Period;
 import org.hl7.fhir.r4.model.Questionnaire;
+import org.hl7.fhir.r4.model.Questionnaire.QuestionnaireItemComponent;
 import org.hl7.fhir.r4.model.Questionnaire.QuestionnaireItemType;
 import org.hl7.fhir.r4.model.RelatedArtifact;
 import org.junit.jupiter.api.Test;
 import org.opencds.cqf.fhir.utility.Constants;
+import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
+import org.opencds.cqf.fhir.utility.adapter.IQuestionnaireAdapterTest;
 import org.opencds.cqf.fhir.utility.adapter.TestVisitor;
 
-class QuestionnaireAdapterTest {
+class QuestionnaireAdapterTest implements IQuestionnaireAdapterTest<Questionnaire> {
     private final org.opencds.cqf.fhir.utility.adapter.IAdapterFactory adapterFactory = new AdapterFactory();
+    private final FhirContext fhirContext = FhirContext.forR4Cached();
 
     @Test
     void invalid_object_fails() {
@@ -215,7 +221,48 @@ class QuestionnaireAdapterTest {
         var extractedDependencies = adapter.getDependencies();
         assertEquals(dependencies.size(), extractedDependencies.size());
         extractedDependencies.forEach(dep -> {
-            assertTrue(dependencies.indexOf(dep.getReference()) >= 0);
+            assertTrue(dependencies.contains(dep.getReference()));
         });
+    }
+
+    @Test
+    void testItem() {
+        var questionnaire = new Questionnaire();
+        var item1 = adapterFactory.createQuestionnaireItem(
+                new QuestionnaireItemComponent().setLinkId("1").setType(QuestionnaireItemType.BOOLEAN));
+        var item2 = adapterFactory.createQuestionnaireItem(
+                new QuestionnaireItemComponent().setLinkId("2").setType(QuestionnaireItemType.BOOLEAN));
+        var item3 = adapterFactory.createQuestionnaireItem(
+                new QuestionnaireItemComponent().setLinkId("3").setType(QuestionnaireItemType.BOOLEAN));
+        var item4 = adapterFactory.createQuestionnaireItem(
+                new QuestionnaireItemComponent().setLinkId("4").setType(QuestionnaireItemType.BOOLEAN));
+        questionnaire.addItem((QuestionnaireItemComponent) item1.get());
+        questionnaire.addItem((QuestionnaireItemComponent) item2.get());
+        var adapter = adapterFactory.createQuestionnaire(questionnaire);
+        assertTrue(adapter.hasItem());
+        assertEquals(2, adapter.getItem().size());
+        adapter.addItem(item3);
+        assertEquals(3, adapter.getItem().size());
+        adapter.addItem((IBaseBackboneElement) item4.get());
+        assertEquals(4, adapter.getItem().size());
+        adapter.setItem(List.of(item1));
+        assertEquals(1, adapter.getItem().size());
+        adapter.addItems(List.of(item2, item3, item4));
+        assertEquals(4, adapter.getItem().size());
+    }
+
+    @Override
+    public Class<Questionnaire> questionnaireClass() {
+        return Questionnaire.class;
+    }
+
+    @Override
+    public FhirContext fhirContext() {
+        return fhirContext;
+    }
+
+    @Override
+    public IAdapterFactory getAdapterFactory() {
+        return adapterFactory;
     }
 }

@@ -5,6 +5,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import ca.uhn.fhir.context.FhirVersionEnum;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.hl7.fhir.instance.model.api.IBase;
 import org.hl7.fhir.instance.model.api.IBaseBundle;
 import org.hl7.fhir.instance.model.api.IBaseOperationOutcome;
@@ -19,6 +20,7 @@ import org.opencds.cqf.fhir.utility.adapter.IElementDefinitionAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IQuestionnaireAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IStructureDefinitionAdapter;
 
+@SuppressWarnings("UnstableApiUsage")
 public class GenerateRequest implements IQuestionnaireRequest {
     private final IStructureDefinitionAdapter profileAdapter;
     private final boolean supportedOnly;
@@ -27,7 +29,6 @@ public class GenerateRequest implements IQuestionnaireRequest {
     private final ModelResolver modelResolver;
     private final FhirVersionEnum fhirVersion;
     private Map<String, String> referencedLibraries;
-    private IBaseResource questionnaire;
     private IQuestionnaireAdapter questionnaireAdapter;
     private List<IElementDefinitionAdapter> differentialElements;
     private List<IElementDefinitionAdapter> snapshotElements;
@@ -60,10 +61,6 @@ public class GenerateRequest implements IQuestionnaireRequest {
     }
 
     public IQuestionnaireAdapter getQuestionnaireAdapter() {
-        if (questionnaireAdapter == null && questionnaire != null) {
-            questionnaireAdapter = (IQuestionnaireAdapter)
-                    getAdapterFactory().createKnowledgeArtifactAdapter((IDomainResource) questionnaire);
-        }
         return questionnaireAdapter;
     }
 
@@ -84,7 +81,9 @@ public class GenerateRequest implements IQuestionnaireRequest {
     }
 
     public GenerateRequest setQuestionnaire(IBaseResource questionnaire) {
-        this.questionnaire = questionnaire;
+        if (questionnaire != null) {
+            questionnaireAdapter = getAdapterFactory().createQuestionnaire(questionnaire);
+        }
         return this;
     }
 
@@ -148,7 +147,7 @@ public class GenerateRequest implements IQuestionnaireRequest {
 
     @Override
     public IBaseResource getQuestionnaire() {
-        return questionnaire;
+        return questionnaireAdapter == null ? null : questionnaireAdapter.get();
     }
 
     @Override
@@ -161,5 +160,11 @@ public class GenerateRequest implements IQuestionnaireRequest {
     public void setOperationOutcome(IBaseOperationOutcome operationOutcome) {
         // Errors during Questionnaire generation manifest as error items
         throw new UnsupportedOperationException("Unimplemented method 'setOperationOutcome'");
+    }
+
+    public Set<String> getFHIRTypes() {
+        var resourceTypes = libraryEngine.getRepository().fhirContext().getResourceTypes();
+        resourceTypes.add("Resource");
+        return resourceTypes;
     }
 }

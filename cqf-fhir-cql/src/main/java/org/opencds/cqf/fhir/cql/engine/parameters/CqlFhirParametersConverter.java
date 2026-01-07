@@ -5,10 +5,10 @@ import static java.util.Objects.requireNonNull;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.server.exceptions.InternalErrorException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
@@ -23,6 +23,7 @@ import org.opencds.cqf.cql.engine.execution.EvaluationResult;
 import org.opencds.cqf.cql.engine.execution.ExpressionResult;
 import org.opencds.cqf.cql.engine.fhir.converter.FhirTypeConverter;
 import org.opencds.cqf.cql.engine.model.ModelResolver;
+import org.opencds.cqf.fhir.utility.adapter.IAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
 import org.opencds.cqf.fhir.utility.adapter.IParametersAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IParametersParameterComponentAdapter;
@@ -37,7 +38,7 @@ public class CqlFhirParametersConverter {
     protected FhirTypeConverter fhirTypeConverter;
     protected FhirContext fhirContext;
     // private IFhirPath fhirPath;
-    private ModelResolver modelResolver;
+    private final ModelResolver modelResolver;
 
     /*
      * Converts both CQL parameters and CQL Evaluation Results into Fhir Parameters Resources
@@ -60,10 +61,11 @@ public class CqlFhirParametersConverter {
 
     private static IBaseBooleanDatatype booleanType(FhirContext context, Boolean value) {
         try {
-            return (IBaseBooleanDatatype) context.getElementDefinition("Boolean")
-                    .getImplementingClass()
-                    .getDeclaredConstructor(Boolean.class)
-                    .newInstance(value);
+            var booleanElementDef = context.getElementDefinition("Boolean");
+            if (booleanElementDef == null) {
+                throw new InternalErrorException("Unable to get definition for Boolean element");
+            }
+            return (IBaseBooleanDatatype) booleanElementDef.newInstance(value);
         } catch (Exception e) {
             throw new InternalErrorException("error creating BooleanType", e);
         }
@@ -71,10 +73,11 @@ public class CqlFhirParametersConverter {
 
     private static IBaseDatatype codeType(FhirContext context, String value) {
         try {
-            return (IBaseDatatype) context.getElementDefinition("Code")
-                    .getImplementingClass()
-                    .getDeclaredConstructor(String.class)
-                    .newInstance(value);
+            var codeElementDef = context.getElementDefinition("Code");
+            if (codeElementDef == null) {
+                throw new InternalErrorException("Unable to get definition for Code element");
+            }
+            return (IBaseDatatype) codeElementDef.newInstance(value);
         } catch (Exception e) {
             throw new InternalErrorException("error creating CodeType", e);
         }
@@ -104,19 +107,10 @@ public class CqlFhirParametersConverter {
 
         IParametersAdapter pa = this.adapterFactory.createParameters(params);
 
-        for (Map.Entry<String, ExpressionResult> entry : evaluationResult.expressionResults.entrySet()) {
+        for (Map.Entry<String, ExpressionResult> entry :
+                evaluationResult.getExpressionResults().entrySet()) {
             String name = entry.getKey();
-            Object value = entry.getValue().value();
-
-            if (value == null) {
-                // Null value, add a single empty value with an extension indicating the reason
-                var dataAbsentValue = emptyBooleanWithExtension(
-                        fhirContext,
-                        DATA_ABSENT_REASON_EXT_URL,
-                        codeType(fhirContext, DATA_ABSENT_REASON_UNKNOWN_CODE));
-                addPart(pa, name, dataAbsentValue);
-                continue;
-            }
+            Object value = entry.getValue().getValue();
 
             if (value instanceof Iterable<?> iterable) {
                 if (!iterable.iterator().hasNext()) {
@@ -125,8 +119,7 @@ public class CqlFhirParametersConverter {
                             emptyBooleanWithExtension(fhirContext, EMPTY_LIST_EXT_URL, booleanType(fhirContext, true));
                     addPart(pa, name, emptyListValue);
                 }
-                Iterable<?> values = iterable;
-                for (Object o : values) {
+                for (Object o : iterable) {
                     this.addPart(pa, name, o);
                 }
             } else {
@@ -148,7 +141,8 @@ public class CqlFhirParametersConverter {
     @SuppressWarnings("unchecked")
     protected void addPart(IParametersAdapter pa, String name, Object value) {
         if (value == null) {
-            return;
+            value = emptyBooleanWithExtension(
+                    fhirContext, DATA_ABSENT_REASON_EXT_URL, codeType(fhirContext, DATA_ABSENT_REASON_UNKNOWN_CODE));
         }
 
         if (value instanceof Iterable) {
@@ -223,8 +217,10 @@ public class CqlFhirParametersConverter {
     }
 
     public List<CqlParameterDefinition> toCqlParameterDefinitions(IBaseParameters parameters) {
+        // This list needs to be mutable so that extra parameter definitions can be added if needed.
+        List<CqlParameterDefinition> cqlParameterDefinitions = new ArrayList<>();
         if (parameters == null) {
-            return Collections.emptyList();
+            return cqlParameterDefinitions;
         }
 
         IParametersAdapter parametersAdapter = this.adapterFactory.createParameters(parameters);
@@ -233,11 +229,10 @@ public class CqlFhirParametersConverter {
                 .filter(x -> x.getName() != null)
                 .collect(Collectors.groupingBy(IParametersParameterComponentAdapter::getName));
 
-        List<CqlParameterDefinition> cqlParameterDefinitions = new ArrayList<>();
         for (Map.Entry<String, List<IParametersParameterComponentAdapter>> entry : children.entrySet()) {
             // Meta data extension, if present
             Optional<IBaseExtension<?, ?>> ext = entry.getValue().stream()
-                    .filter(x -> x.hasExtension())
+                    .filter(IAdapter::hasExtension)
                     .flatMap(x -> x.getExtension().stream())
                     .filter(x -> x.getUrl() != null
                             && x.getUrl()
@@ -246,8 +241,8 @@ public class CqlFhirParametersConverter {
 
             // Actual values. if present
             List<Object> values = entry.getValue().stream()
-                    .map(x -> convertToCql(x))
-                    .filter(x -> x != null)
+                    .map(this::convertToCql)
+                    .filter(Objects::nonNull)
                     .collect(Collectors.toList());
 
             String name = entry.getKey();
@@ -264,10 +259,8 @@ public class CqlFhirParametersConverter {
                     throw new IllegalArgumentException(
                             "Unable to determine if parameter %s is meant to be collection. Use the http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-parameterDefinition extension to specify metadata."
                                     .formatted(entry.getKey()));
-                } else if (values.size() == 1) {
-                    isList = false;
                 } else {
-                    isList = true;
+                    isList = values.size() != 1;
                 }
             }
 

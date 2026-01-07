@@ -1,7 +1,9 @@
 package org.opencds.cqf.fhir.cr.measure.dstu3;
 
+import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.repository.IRepository;
 import ca.uhn.fhir.rest.server.exceptions.InvalidRequestException;
+import com.google.common.annotations.VisibleForTesting;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,6 +29,7 @@ import org.opencds.cqf.fhir.cql.Engines;
 import org.opencds.cqf.fhir.cql.LibraryEngine;
 import org.opencds.cqf.fhir.cr.measure.MeasureEvaluationOptions;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureEvalType;
+import org.opencds.cqf.fhir.cr.measure.common.MeasureEvaluationResultHandler;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureProcessorUtils;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureReportType;
 import org.opencds.cqf.fhir.cr.measure.common.MultiLibraryIdMeasureEngineDetails;
@@ -40,6 +43,8 @@ public class Dstu3MeasureProcessor {
     private final MeasureEvaluationOptions measureEvaluationOptions;
     private final SubjectProvider subjectProvider;
     private final MeasureProcessorUtils measureProcessorUtils = new MeasureProcessorUtils();
+    private final FhirContext fhirContext = FhirContext.forDstu3Cached();
+    private final MeasureEvaluationResultHandler measureEvaluationResultHandler;
 
     public Dstu3MeasureProcessor(IRepository repository, MeasureEvaluationOptions measureEvaluationOptions) {
         this(repository, measureEvaluationOptions, new Dstu3RepositorySubjectProvider());
@@ -53,6 +58,8 @@ public class Dstu3MeasureProcessor {
         this.measureEvaluationOptions =
                 measureEvaluationOptions != null ? measureEvaluationOptions : MeasureEvaluationOptions.defaultOptions();
         this.subjectProvider = subjectProvider;
+        this.measureEvaluationResultHandler =
+                new MeasureEvaluationResultHandler(this.measureEvaluationOptions, new Dstu3PopulationBasisValidator());
     }
 
     public MeasureReport evaluateMeasure(
@@ -72,6 +79,75 @@ public class Dstu3MeasureProcessor {
     // ensures that
     // the repositories are set up correctly.
     protected MeasureReport evaluateMeasure(
+            Measure measure,
+            String periodStart,
+            String periodEnd,
+            String reportType,
+            List<String> subjectIds,
+            IBaseBundle additionalData,
+            Parameters parameters) {
+
+        return evaluateMeasureCaptureDefs(
+                        measure, periodStart, periodEnd, reportType, subjectIds, additionalData, parameters)
+                .measureReport();
+    }
+
+    /**
+     * Test-visible evaluation method that captures both MeasureDef and MeasureReport.
+     * <p>
+     * <strong>TEST INFRASTRUCTURE ONLY - DO NOT USE IN PRODUCTION CODE</strong>
+     * </p>
+     * <p>
+     * This overload reads the Measure from the repository by ID and delegates to
+     * evaluateMeasureCaptureDefs(Measure, ...).
+     * </p>
+     *
+     * @param measureId Measure ID
+     * @param periodStart start date string of Measurement Period
+     * @param periodEnd end date string of Measurement Period
+     * @param reportType type of report
+     * @param subjectIds the subjectIds to process
+     * @param additionalData additional data bundle
+     * @param parameters CQL parameters
+     * @return MeasureDefAndDstu3MeasureReport containing both MeasureDef and MeasureReport
+     */
+    @VisibleForTesting
+    MeasureDefAndDstu3MeasureReport evaluateMeasureCaptureDefs(
+            IdType measureId,
+            String periodStart,
+            String periodEnd,
+            String reportType,
+            List<String> subjectIds,
+            IBaseBundle additionalData,
+            Parameters parameters) {
+
+        Measure measure = this.repository.read(Measure.class, measureId);
+        return evaluateMeasureCaptureDefs(
+                measure, periodStart, periodEnd, reportType, subjectIds, additionalData, parameters);
+    }
+
+    /**
+     * Test-visible evaluation method that captures both MeasureDef and MeasureReport.
+     * <p>
+     * <strong>TEST INFRASTRUCTURE ONLY - DO NOT USE IN PRODUCTION CODE</strong>
+     * </p>
+     * <p>
+     * This method is package-private and annotated with @VisibleForTesting to support
+     * test frameworks that need to assert on both pre-scoring state (MeasureDef) and
+     * post-scoring state (MeasureReport).
+     * </p>
+     *
+     * @param measure Measure resource
+     * @param periodStart start date string of Measurement Period
+     * @param periodEnd end date string of Measurement Period
+     * @param reportType type of report
+     * @param subjectIds the subjectIds to process
+     * @param additionalData additional data bundle
+     * @param parameters CQL parameters
+     * @return MeasureDefAndDstu3MeasureReport containing both MeasureDef and MeasureReport
+     */
+    @VisibleForTesting
+    MeasureDefAndDstu3MeasureReport evaluateMeasureCaptureDefs(
             Measure measure,
             String periodStart,
             String periodEnd,
@@ -108,28 +184,24 @@ public class Dstu3MeasureProcessor {
                 Optional.ofNullable(measure.getUrl()).map(List::of).orElse(List.of("Unknown Measure URL")));
         // extract measurement Period from CQL to pass to report Builder
         Interval measurementPeriod =
-                measureProcessorUtils.getDefaultMeasurementPeriod(measurementPeriodParams, context);
+                MeasureProcessorUtils.getDefaultMeasurementPeriod(measurementPeriodParams, context);
         // set offset of operation parameter measurement period
         ZonedDateTime zonedMeasurementPeriod = MeasureProcessorUtils.getZonedTimeZoneForEval(measurementPeriod);
         // populate results from Library $evaluate
         if (!subjects.isEmpty()) {
-            var results = measureProcessorUtils.getEvaluationResults(
+            var results = MeasureEvaluationResultHandler.getEvaluationResults(
                     subjectIds, zonedMeasurementPeriod, context, measureLibraryIdEngineDetails);
 
             // Process Criteria Expression Results
-            measureProcessorUtils.processResults(
-                    results.processMeasureForSuccessOrFailure(measure.getIdElement(), measureDef),
-                    measureDef,
-                    evalType,
-                    measureEvaluationOptions.getApplyScoringSetMembership(),
-                    new Dstu3PopulationBasisValidator());
+            measureEvaluationResultHandler.processResults(
+                    fhirContext, results.processMeasureForSuccessOrFailure(measureDef), measureDef, evalType);
         }
-        // Populate populationDefs that require MeasureDef results
-        measureProcessorUtils.continuousVariableObservation(measureDef, context);
 
         // Build Measure Report with Results
-        return new Dstu3MeasureReportBuilder()
+        MeasureReport measureReport = new Dstu3MeasureReportBuilder()
                 .build(measure, measureDef, evalTypeToReportType(evalType), measurementPeriod, subjects);
+
+        return new MeasureDefAndDstu3MeasureReport(measureDef, measureReport);
     }
 
     // Ideally this would be done in MeasureProcessorUtils, but it's too much work to change for now
@@ -140,9 +212,10 @@ public class Dstu3MeasureProcessor {
 
         final LibraryEngine libraryEngine = getLibraryEngine(parameters, libraryVersionIdentifier, context);
 
+        var measureDef = new Dstu3MeasureDefBuilder().build(measure);
+
         return MultiLibraryIdMeasureEngineDetails.builder(libraryEngine)
-                .addLibraryIdToMeasureId(
-                        new VersionedIdentifier().withId(libraryVersionIdentifier.getId()), measure.getIdElement())
+                .addLibraryIdToMeasureId(new VersionedIdentifier().withId(libraryVersionIdentifier.getId()), measureDef)
                 .build();
     }
 

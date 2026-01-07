@@ -2,217 +2,70 @@ package org.opencds.cqf.fhir.cr.measure.r4;
 
 import static org.opencds.cqf.fhir.cr.measure.common.MeasurePopulationType.DATEOFCOMPLIANCE;
 import static org.opencds.cqf.fhir.cr.measure.constant.MeasureConstants.CQFM_CARE_GAP_DATE_OF_COMPLIANCE_EXT_URL;
-import static org.opencds.cqf.fhir.cr.measure.constant.MeasureConstants.EXT_CRITERIA_REFERENCE_URL;
 import static org.opencds.cqf.fhir.cr.measure.constant.MeasureConstants.EXT_SDE_REFERENCE_URL;
 
+import ca.uhn.fhir.rest.server.exceptions.InternalErrorException;
 import ca.uhn.fhir.rest.server.exceptions.InvalidRequestException;
-import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Table;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
-import org.hl7.fhir.exceptions.FHIRException;
-import org.hl7.fhir.instance.model.api.IPrimitiveType;
+import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.CanonicalType;
 import org.hl7.fhir.r4.model.CodeableConcept;
 import org.hl7.fhir.r4.model.Coding;
+import org.hl7.fhir.r4.model.DecimalType;
 import org.hl7.fhir.r4.model.DomainResource;
-import org.hl7.fhir.r4.model.Element;
 import org.hl7.fhir.r4.model.Extension;
-import org.hl7.fhir.r4.model.Identifier;
 import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.ListResource;
 import org.hl7.fhir.r4.model.Measure;
 import org.hl7.fhir.r4.model.Measure.MeasureGroupComponent;
 import org.hl7.fhir.r4.model.Measure.MeasureGroupPopulationComponent;
-import org.hl7.fhir.r4.model.Measure.MeasureGroupStratifierComponent;
 import org.hl7.fhir.r4.model.MeasureReport;
 import org.hl7.fhir.r4.model.MeasureReport.MeasureReportGroupComponent;
 import org.hl7.fhir.r4.model.MeasureReport.MeasureReportGroupPopulationComponent;
-import org.hl7.fhir.r4.model.MeasureReport.MeasureReportGroupStratifierComponent;
 import org.hl7.fhir.r4.model.MeasureReport.MeasureReportStatus;
-import org.hl7.fhir.r4.model.MeasureReport.StratifierGroupComponent;
-import org.hl7.fhir.r4.model.MeasureReport.StratifierGroupComponentComponent;
-import org.hl7.fhir.r4.model.MeasureReport.StratifierGroupPopulationComponent;
 import org.hl7.fhir.r4.model.Observation;
-import org.hl7.fhir.r4.model.OperationOutcome;
-import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
 import org.hl7.fhir.r4.model.Reference;
 import org.hl7.fhir.r4.model.Resource;
 import org.hl7.fhir.r4.model.ResourceType;
 import org.hl7.fhir.r4.model.StringType;
-import org.opencds.cqf.cql.engine.runtime.Code;
 import org.opencds.cqf.cql.engine.runtime.Interval;
 import org.opencds.cqf.fhir.cr.measure.common.CodeDef;
 import org.opencds.cqf.fhir.cr.measure.common.ConceptDef;
-import org.opencds.cqf.fhir.cr.measure.common.CriteriaResult;
+import org.opencds.cqf.fhir.cr.measure.common.FhirResourceUtils;
 import org.opencds.cqf.fhir.cr.measure.common.GroupDef;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureDef;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureInfo;
 import org.opencds.cqf.fhir.cr.measure.common.MeasurePopulationType;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureReportBuilder;
-import org.opencds.cqf.fhir.cr.measure.common.MeasureReportScorer;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureReportType;
 import org.opencds.cqf.fhir.cr.measure.common.MeasureScoring;
 import org.opencds.cqf.fhir.cr.measure.common.PopulationDef;
 import org.opencds.cqf.fhir.cr.measure.common.SdeDef;
-import org.opencds.cqf.fhir.cr.measure.common.StratifierComponentDef;
-import org.opencds.cqf.fhir.cr.measure.common.StratifierDef;
+import org.opencds.cqf.fhir.cr.measure.common.StratumDef;
+import org.opencds.cqf.fhir.cr.measure.common.StratumValueDef;
+import org.opencds.cqf.fhir.cr.measure.common.StratumValueWrapper;
 import org.opencds.cqf.fhir.cr.measure.constant.MeasureConstants;
 import org.opencds.cqf.fhir.cr.measure.constant.MeasureReportConstants;
 import org.opencds.cqf.fhir.cr.measure.r4.utils.R4DateHelper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, MeasureReport, DomainResource> {
 
+    private static final Logger logger = LoggerFactory.getLogger(R4MeasureReportBuilder.class);
     protected static final String POPULATION_SUBJECT_SET = "POPULATION_SUBJECT_SET";
-
-    private final MeasureReportScorer<MeasureReport> measureReportScorer;
-
-    public R4MeasureReportBuilder() {
-        this.measureReportScorer = new R4MeasureReportScorer();
-    }
-
-    private static class BuilderContext {
-        private final Measure measure;
-        private final MeasureDef measureDef;
-        private final MeasureReport measureReport;
-
-        private final HashMap<String, Reference> evaluatedResourceReferences = new HashMap<>();
-        private final HashMap<String, Reference> supplementalDataReferences = new HashMap<>();
-        private final Map<String, Resource> contained = new HashMap<>();
-
-        public BuilderContext(Measure measure, MeasureDef measureDef, MeasureReport measureReport) {
-            this.measure = measure;
-            this.measureDef = measureDef;
-            this.measureReport = measureReport;
-        }
-
-        public Map<String, Resource> contained() {
-            return this.contained;
-        }
-
-        public void addContained(Resource r) {
-            this.contained.putIfAbsent(this.getId(r), r);
-        }
-
-        public Measure measure() {
-            return this.measure;
-        }
-
-        public MeasureReport report() {
-            return this.measureReport;
-        }
-
-        public MeasureDef measureDef() {
-            return this.measureDef;
-        }
-
-        public Map<String, Reference> evaluatedResourceReferences() {
-            return this.evaluatedResourceReferences;
-        }
-
-        public Map<String, Reference> supplementalDataReferences() {
-            return this.supplementalDataReferences;
-        }
-
-        public Reference addSupplementalDataReference(String id) {
-            validateReference(id);
-            return this.supplementalDataReferences().computeIfAbsent(id, x -> new Reference(id));
-        }
-
-        public Reference addEvaluatedResourceReference(String id) {
-            validateReference(id);
-            return this.evaluatedResourceReferences().computeIfAbsent(id, x -> new Reference(id));
-        }
-
-        public boolean hasEvaluatedResource(String id) {
-            validateReference(id);
-            return this.evaluatedResourceReferences().containsKey(id);
-        }
-
-        public void addCriteriaExtensionToReference(Reference reference, String criteriaId) {
-            if (criteriaId == null) throw new AssertionError("CriteriaId is required for extension references");
-            var ext = new Extension(EXT_CRITERIA_REFERENCE_URL, new StringType(criteriaId));
-            addExtensionIfNotExists(reference, ext);
-        }
-
-        public void addCriteriaExtensionToSupplementalData(Resource resource, String criteriaId) {
-            var id = getId(resource);
-
-            // This is not an evaluated resource, so add it to the contained resources
-            if (!hasEvaluatedResource(id)) {
-                this.addContained(resource);
-                id = "#" + resource.getIdElement().getIdPart();
-            }
-            var ref = addSupplementalDataReference(id);
-            addCriteriaExtensionToReference(ref, criteriaId);
-        }
-
-        public void addCriteriaExtensionToEvaluatedResource(Resource resource, String criteriaId) {
-            var id = getId(resource);
-            var ref = addEvaluatedResourceReference(id);
-            addCriteriaExtensionToReference(ref, criteriaId);
-        }
-
-        private String getId(Resource resource) {
-            return resource.fhirType() + "/" + resource.getIdElement().getIdPart();
-        }
-
-        private void addExtensionIfNotExists(Element element, Extension ext) {
-            for (var e : element.getExtension()) {
-                if (e.getUrl().equals(ext.getUrl()) && e.getValue().equalsShallow(ext.getValue())) {
-                    return;
-                }
-            }
-
-            element.addExtension(ext);
-        }
-
-        private void validateReference(String reference) {
-            // Can't be null
-            if (reference == null) {
-                throw new NullPointerException("validated reference is null");
-            }
-
-            // If it's a contained reference, must be just the Guid and nothing else
-            if (reference.startsWith("#") && reference.contains("/")) {
-                throw new InvalidRequestException("Invalid contained reference: " + reference);
-            }
-
-            // If it's a full reference, it must be type/id and that's it
-            if (!reference.startsWith("#") && reference.split("/").length != 2) {
-                throw new InvalidRequestException("Invalid full reference: " + reference);
-            }
-        }
-
-        public void addOperationOutcomes() {
-            var errorMsgs = this.measureDef.errors();
-            for (var error : errorMsgs) {
-                addContained(createOperationOutcome(error));
-            }
-        }
-
-        private OperationOutcome createOperationOutcome(String errorMsg) {
-            OperationOutcome op = new OperationOutcome();
-            op.addIssue()
-                    .setSeverity(OperationOutcome.IssueSeverity.ERROR)
-                    .setCode(IssueType.EXCEPTION)
-                    .setDiagnostics(errorMsg);
-            return op;
-        }
-    }
 
     @Override
     public MeasureReport build(
@@ -224,7 +77,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
 
         var report = this.createMeasureReport(measure, measureDef, measureReportType, subjectIds, measurementPeriod);
 
-        var bc = new BuilderContext(measure, measureDef, report);
+        var bc = new R4MeasureReportBuilderContext(measure, measureDef, report);
 
         // buildGroups must be run first to set up the builder context to be able to use
         // the evaluatedResource references for SDE processing
@@ -240,12 +93,14 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
             bc.report().addContained(r);
         }
 
-        this.measureReportScorer.score(measure.getUrl(), measureDef, bc.report());
+        // Copy scores from Def objects (populated by MeasureReportDefScorer in MeasureEvaluationResultHandler)
+        copyScoresFromDef(bc);
+
         setReportStatus(bc);
         return bc.report();
     }
 
-    private void setReportStatus(BuilderContext bc) {
+    private void setReportStatus(R4MeasureReportBuilderContext bc) {
         if (bc.report().hasContained()
                 && bc.report().getContained().stream()
                         .anyMatch(t -> t.getResourceType().equals(ResourceType.OperationOutcome))) {
@@ -254,7 +109,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         }
     }
 
-    protected void addSupplementalData(BuilderContext bc) {
+    private void addSupplementalData(R4MeasureReportBuilderContext bc) {
         var report = bc.report();
 
         for (Reference r : bc.supplementalDataReferences().values()) {
@@ -262,7 +117,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         }
     }
 
-    protected void addEvaluatedResource(BuilderContext bc) {
+    private void addEvaluatedResource(R4MeasureReportBuilderContext bc) {
         var report = bc.report();
         // Only add evaluated resources to individual reports
         if (report.getType() == org.hl7.fhir.r4.model.MeasureReport.MeasureReportType.INDIVIDUAL) {
@@ -272,13 +127,13 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         }
     }
 
-    protected void buildGroups(BuilderContext bc) {
+    private void buildGroups(R4MeasureReportBuilderContext bc) {
         var measure = bc.measure();
         var measureDef = bc.measureDef();
         var report = bc.report();
 
         if (measure.getGroup().size() != measureDef.groups().size()) {
-            throw new InvalidRequestException(
+            throw new InternalErrorException(
                     "The Measure has a different number of groups defined than the MeasureDef for Measure: "
                             + measure.getUrl());
         }
@@ -293,26 +148,14 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         }
     }
 
-    private PopulationDef getReportPopulation(GroupDef reportGroup, MeasurePopulationType measurePopType) {
-        var populations = reportGroup.populations();
-        return populations.stream()
-                .filter(e -> e.code().first().code().equals(measurePopType.toCode()))
-                .findAny()
-                .orElse(null);
-    }
-
-    protected void buildGroup(
-            BuilderContext bc,
+    private void buildGroup(
+            R4MeasureReportBuilderContext bc,
             MeasureGroupComponent measureGroup,
             MeasureReportGroupComponent reportGroup,
             GroupDef groupDef) {
 
         var groupDefSizeDiff = 0;
-        if (groupDef.populations().stream()
-                        .filter(x -> x.type().equals(MeasurePopulationType.DATEOFCOMPLIANCE))
-                        .findFirst()
-                        .orElse(null)
-                != null) {
+        if (groupDef.hasPopulationType(MeasurePopulationType.DATEOFCOMPLIANCE)) {
             // dateOfNonCompliance is another population not calculated
             groupDefSizeDiff = 1;
         }
@@ -336,34 +179,26 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         addExtensionImprovementNotation(reportGroup, groupDef);
 
         for (int i = 0; i < measureGroup.getPopulation().size(); i++) {
+            // Report Population Component
             var measurePop = measureGroup.getPopulation().get(i);
-            PopulationDef defPop = null;
-            for (int x = 0; x < groupDef.populations().size(); x++) {
-                var groupDefPop = groupDef.populations().get(x);
-                if (groupDefPop
-                        .code()
-                        .first()
-                        .code()
-                        .equals(measurePop.getCode().getCodingFirstRep().getCode())) {
-                    defPop = groupDefPop;
-                    break;
-                }
-            }
+            // Groups can have more than one of the same PopulationType, we need a Unique value to bind on
+            PopulationDef defPop = groupDef.findPopulationById(measurePop.getId());
             var reportPop = reportGroup.addPopulation();
             buildPopulation(bc, measurePop, reportPop, defPop, groupDef);
         }
 
         // add extension to group for totalDenominator and totalNumerator
         if (groupDef.measureScoring().equals(MeasureScoring.PROPORTION)
-                || groupDef.measureScoring().equals(MeasureScoring.RATIO)) {
+                || groupDef.measureScoring().equals(MeasureScoring.RATIO)
+                || groupDef.measureScoring().equals(MeasureScoring.CONTINUOUSVARIABLE)) {
 
             // add extension to group for
-            if (bc.measureReport.getType().equals(MeasureReport.MeasureReportType.INDIVIDUAL)) {
-                var docPopDef = getReportPopulation(groupDef, DATEOFCOMPLIANCE);
+            if (bc.report().getType().equals(MeasureReport.MeasureReportType.INDIVIDUAL)) {
+                var docPopDef = groupDef.findPopulationByType(DATEOFCOMPLIANCE);
                 if (docPopDef != null
-                        && docPopDef.getResources() != null
-                        && !docPopDef.getResources().isEmpty()) {
-                    var docValue = docPopDef.getResources().iterator().next();
+                        && docPopDef.getAllSubjectResources() != null
+                        && !docPopDef.getAllSubjectResources().isEmpty()) {
+                    var docValue = docPopDef.getAllSubjectResources().iterator().next();
                     if (docValue != null) {
                         assert docValue instanceof Interval;
                         Interval docInterval = (Interval) docValue;
@@ -381,167 +216,19 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
             var groupStrat = measureGroup.getStratifier().get(i);
             var reportStrat = reportGroup.addStratifier();
             var defStrat = groupDef.stratifiers().get(i);
-            buildStratifier(bc, groupStrat, reportStrat, defStrat, measureGroup.getPopulation(), groupDef);
+            R4StratifierBuilder.buildStratifier(
+                    bc, groupStrat, reportStrat, defStrat, measureGroup.getPopulation(), groupDef);
         }
     }
 
-    protected void buildStratifier(
-            BuilderContext bc,
-            MeasureGroupStratifierComponent measureStratifier,
-            MeasureReportGroupStratifierComponent reportStratifier,
-            StratifierDef stratifierDef,
-            List<MeasureGroupPopulationComponent> populations,
-            GroupDef groupDef) {
-        // the top level stratifier 'id' and 'code'
-        reportStratifier.setCode(Collections.singletonList(measureStratifier.getCode()));
-        reportStratifier.setId(measureStratifier.getId());
-        // if description is defined, add to MeasureReport
-        if (measureStratifier.hasDescription()) {
-            reportStratifier.addExtension(
-                    MeasureConstants.EXT_POPULATION_DESCRIPTION_URL,
-                    new StringType(measureStratifier.getDescription()));
-        }
-
-        if (!stratifierDef.components().isEmpty()) {
-
-            Table<String, ValueWrapper, StratifierComponentDef> subjectResultTable = HashBasedTable.create();
-
-            // Component Stratifier
-            // one or more criteria expression defined, one set of criteria results per component specified
-            // results of component stratifier are an intersection of membership to both component result sets
-
-            stratifierDef.components().forEach(component -> {
-                component.getResults().forEach((subject, result) -> {
-                    ValueWrapper valueWrapper = new ValueWrapper(result.rawValue());
-                    subjectResultTable.put(ResourceType.Patient + "/" + subject, valueWrapper, component);
-                });
-            });
-
-            // Stratifiers should be of the same basis as population
-            // Split subjects by result values
-            // ex. all Male Patients and all Female Patients
-            componentStratifier(bc, reportStratifier, populations, groupDef, subjectResultTable);
-
-        } else {
-            // standard Stratifier
-            // one criteria expression defined, one set of criteria results
-            Map<String, CriteriaResult> subjectValues = stratifierDef.getResults();
-            nonComponentStratifier(bc, reportStratifier, populations, groupDef, subjectValues);
-        }
-    }
-
-    protected void addMeasureDescription(MeasureReportGroupComponent reportGroup, MeasureGroupComponent measureGroup) {
+    private void addMeasureDescription(MeasureReportGroupComponent reportGroup, MeasureGroupComponent measureGroup) {
         if (measureGroup.hasDescription()) {
             reportGroup.addExtension(
                     MeasureConstants.EXT_POPULATION_DESCRIPTION_URL, new StringType(measureGroup.getDescription()));
         }
     }
 
-    public record ValueDef(ValueWrapper value, StratifierComponentDef def) {}
-
-    public static Map<Set<ValueDef>, List<String>> groupSubjectsByValueDefSet(
-            Table<String, ValueWrapper, StratifierComponentDef> table) {
-        // input format
-        // | Subject (String) | CriteriaResult (ValueWrapper) | StratifierComponentDef |
-        // | ---------------- | ----------------------------- | ---------------------- |
-        // | subject-a        | M                             | gender                 |
-        // | subject-b        | F                             | gender                 |
-        // | subject-c        | M                             | gender                 |
-        // | subject-d        | F                             | gender                 |
-        // | subject-e        | F                             | gender                 |
-        // | subject-a        | white                         | race                   |
-        // | subject-b        | hispanic/latino               | race                   |
-        // | subject-c        | hispanic/latino               | race                   |
-        // | subject-d        | black                         | race                   |
-        // | subject-e        | black                         | race                   |
-
-        // Step 1: Build Map<Subject, Set<ValueDef>>
-        Map<String, Set<ValueDef>> subjectToValueDefs = new HashMap<>();
-
-        for (Table.Cell<String, ValueWrapper, StratifierComponentDef> cell : table.cellSet()) {
-            subjectToValueDefs
-                    .computeIfAbsent(cell.getRowKey(), k -> new HashSet<>())
-                    .add(new ValueDef(cell.getColumnKey(), cell.getValue()));
-        }
-        // output format:
-        // | Set<ValueDef>           | List<Subjects(String)> |
-        // | ----------------------- | ---------------------- |
-        // | <'M','White>            | [subject-a]            |
-        // | <'F','hispanic/latino'> | [subject-b]            |
-        // | <'M','hispanic/latino'> | [subject-c]            |
-        // | <'F','black'>           | [subject-d, subject-e] |
-
-        // Step 2: Invert to Map<Set<ValueDef>, List<Subject>>
-        return subjectToValueDefs.entrySet().stream()
-                .collect(Collectors.groupingBy(
-                        Map.Entry::getValue,
-                        Collector.of(ArrayList::new, (list, e) -> list.add(e.getKey()), (l1, l2) -> {
-                            l1.addAll(l2);
-                            return l1;
-                        })));
-    }
-
-    protected void componentStratifier(
-            BuilderContext bc,
-            MeasureReportGroupStratifierComponent reportStratifier,
-            List<MeasureGroupPopulationComponent> populations,
-            GroupDef groupDef,
-            Table<String, ValueWrapper, StratifierComponentDef> subjectCompValues) {
-
-        var componentSubjects = groupSubjectsByValueDefSet(subjectCompValues);
-
-        componentSubjects.forEach((valueSet, subjects) -> {
-            // converts table into component value combinations
-            // | Stratum   | Set<ValueDef>           | List<Subjects(String)> |
-            // | --------- | ----------------------- | ---------------------- |
-            // | Stratum-1 | <'M','White>            | [subject-a]            |
-            // | Stratum-2 | <'F','hispanic/latino'> | [subject-b]            |
-            // | Stratum-3 | <'M','hispanic/latino'> | [subject-c]            |
-            // | Stratum-4 | <'F','black'>           | [subject-d, subject-e] |
-
-            var reportStratum = reportStratifier.addStratum();
-            buildStratum(bc, reportStratum, valueSet, subjects, populations, groupDef);
-        });
-    }
-
-    protected void nonComponentStratifier(
-            BuilderContext bc,
-            MeasureReportGroupStratifierComponent reportStratifier,
-            List<MeasureGroupPopulationComponent> populations,
-            GroupDef groupDef,
-            Map<String, CriteriaResult> subjectValues) {
-        // nonComponent stratifiers will have a single expression that can generate results, instead of grouping
-        // combinations of results
-        // example: 'gender' expression could produce values of 'M', 'F'
-        // subject1: 'gender'--> 'M'
-        // subject2: 'gender'--> 'F'
-        // stratifier criteria results are: 'M', 'F'
-
-        Map<ValueWrapper, List<String>> subjectsByValue = subjectValues.keySet().stream()
-                .collect(Collectors.groupingBy(
-                        x -> new ValueWrapper(subjectValues.get(x).rawValue())));
-        // Stratum 1
-        // Value: 'M'--> subjects: subject1
-        // Stratum 2
-        // Value: 'F'--> subjects: subject2
-        // loop through each value key
-        for (Map.Entry<ValueWrapper, List<String>> stratValue : subjectsByValue.entrySet()) {
-            var reportStratum = reportStratifier.addStratum();
-            // patch Patient values with prefix of ResourceType to match with incoming population subjects for stratum
-            // TODO: should match context of CQL, not only Patient
-            var patients = stratValue.getValue().stream()
-                    .map(t -> ResourceType.Patient.toString().concat("/").concat(t))
-                    .collect(Collectors.toList());
-            // build the stratum for each unique value
-            // non-component stratifiers will populate a 'null' for componentStratifierDef, since it doesn't have
-            // multiple criteria
-            // TODO: build out nonComponent stratum method
-            Set<ValueDef> stratValues = Set.of(new ValueDef(stratValue.getKey(), null));
-            buildStratum(bc, reportStratum, stratValues, patients, populations, groupDef);
-        }
-    }
-
-    protected void addExtensionImprovementNotation(MeasureReportGroupComponent reportGroup, GroupDef groupDef) {
+    private void addExtensionImprovementNotation(MeasureReportGroupComponent reportGroup, GroupDef groupDef) {
         // if already set on Measure, don't set on groups too
         if (groupDef.isGroupImprovementNotation()) {
             if (groupDef.isIncreaseImprovementNotation()) {
@@ -562,185 +249,15 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         }
     }
 
-    private void buildStratum(
-            BuilderContext bc,
-            StratifierGroupComponent stratum,
-            Set<ValueDef> values,
-            List<String> subjectIds,
-            List<MeasureGroupPopulationComponent> populations,
-            GroupDef groupDef) {
-        boolean isComponent = values.size() > 1;
-        for (ValueDef valuePair : values) {
-            ValueWrapper value = valuePair.value;
-            var componentDef = valuePair.def;
-            // Set Stratum value to indicate which value is displaying results
-            // ex. for Gender stratifier, code 'Male'
-            if (value.getValueClass().equals(CodeableConcept.class)) {
-                if (isComponent) {
-                    StratifierGroupComponentComponent sgcc = new StratifierGroupComponentComponent();
-                    // component stratifier example: code: "gender", value: 'M'
-                    // value being stratified: 'M'
-                    sgcc.setValue(new CodeableConcept().setText(value.getValueAsString()));
-                    // code specified from componentDef: "gender"
-                    sgcc.setCode(
-                            new CodeableConcept().setText(componentDef.code().text()));
-                    // set component on MeasureReport
-                    stratum.addComponent(sgcc);
-                } else {
-                    // non-component stratifiers only set stratified value, code is set on stratifier object
-                    // value being stratified: 'M'
-                    stratum.setValue((CodeableConcept) value.getValue());
-                }
-            } else {
-                if (isComponent) {
-                    // component stratifier example: code: "gender", value: 'M'
-                    StratifierGroupComponentComponent sgcc = new StratifierGroupComponentComponent();
-                    // value being stratified: 'M'
-                    sgcc.setValue(new CodeableConcept().setText(value.getValueAsString()));
-                    // code specified from componentDef: "gender"
-                    sgcc.setCode(
-                            new CodeableConcept().setText(componentDef.code().text()));
-                    // set component on MeasureReport
-                    stratum.addComponent(sgcc);
-                } else {
-                    // non-component stratifiers only set stratified value, code is set on stratifier object
-                    // value being stratified: 'M'
-                    stratum.setValue(new CodeableConcept().setText(value.getValueAsString()));
-                }
-            }
+    private String getPopulationResourceIds(Object resourceObject) {
+        if (resourceObject instanceof IBaseResource resource) {
+            return resource.getIdElement().toVersionless().getValueAsString();
         }
-        // add stratum populations for stratifier
-        // Group.populations
-        // initial-population: subject1, subject 2
-        // ** stratifier value: 'M'
-        // ** subjects with stratifier value: 'M': subject1
-        // ** stratum.population
-        // ** ** initial-population: subject1
-        // ** stratifier value: 'F'
-        // ** subjects with stratifier value: 'F': subject2
-        // ** stratum.population
-        // ** ** initial-population: subject2
-        for (MeasureGroupPopulationComponent mgpc : populations) {
-            var stratumPopulation = stratum.addPopulation();
-            buildStratumPopulation(bc, stratumPopulation, subjectIds, mgpc, groupDef);
-        }
-    }
-
-    private void buildBooleanBasisStratumPopulation(
-            BuilderContext bc,
-            StratifierGroupPopulationComponent sgpc,
-            List<String> subjectIds,
-            PopulationDef populationDef) {
-        var popSubjectIds = populationDef.getSubjects().stream()
-                .map(t -> ResourceType.Patient.toString().concat("/").concat(t))
-                .toList();
-        if (popSubjectIds.isEmpty()) {
-            sgpc.setCount(0);
-            return;
-        }
-        // intersect population subjects to stratifier.value subjects
-        Set<String> intersection = new HashSet<>(subjectIds);
-        intersection.retainAll(popSubjectIds);
-        sgpc.setCount(intersection.size());
-
-        // subject-list ListResource to match intersection of results
-        if (!intersection.isEmpty()
-                && bc.report().getType() == org.hl7.fhir.r4.model.MeasureReport.MeasureReportType.SUBJECTLIST) {
-            ListResource popSubjectList = this.createIdList(UUID.randomUUID().toString(), intersection);
-            bc.addContained(popSubjectList);
-            sgpc.setSubjectResults(new Reference("#" + popSubjectList.getId()));
-        }
-    }
-
-    private void buildResourceBasisStratumPopulation(
-            BuilderContext bc,
-            StratifierGroupPopulationComponent sgpc,
-            List<String> subjectIds,
-            PopulationDef populationDef,
-            GroupDef groupDef) {
-        String resourceType;
-        try {
-            // when this method is checked with a primitive value and not ResourceType it returns an error
-            // this try/catch is to prevent the exception thrown from setting the correct value
-            resourceType =
-                    ResourceType.fromCode(groupDef.getPopulationBasis().code()).toString();
-        } catch (FHIRException e) {
-            resourceType = null;
-        }
-        // only ResourceType fhirType should return true here
-        boolean isResourceType = resourceType != null;
-        List<String> resourceIds = new ArrayList<>();
-        assert populationDef != null;
-        if (populationDef.getSubjectResources() != null) {
-            for (String subjectId : subjectIds) {
-                // retrieve criteria results by subject Key
-                var resources = populationDef
-                        .getSubjectResources()
-                        .get(subjectId.replace(ResourceType.Patient.toString().concat("/"), ""));
-                if (resources != null) {
-                    if (isResourceType) {
-                        resourceIds.addAll(resources.stream()
-                                .map(this::getPopulationResourceIds) // get resource id
-                                .toList());
-                    } else {
-                        resourceIds.addAll(
-                                resources.stream().map(Object::toString).toList());
-                    }
-                }
-            }
-        }
-        if (resourceIds.isEmpty()) {
-            sgpc.setCount(0);
-            return;
-        }
-
-        sgpc.setCount(resourceIds.size());
-
-        // subject-list ListResource to match intersection of results
-        if (bc.report().getType() == org.hl7.fhir.r4.model.MeasureReport.MeasureReportType.SUBJECTLIST) {
-            ListResource popSubjectList = this.createIdList(UUID.randomUUID().toString(), resourceIds);
-            bc.addContained(popSubjectList);
-            sgpc.setSubjectResults(new Reference("#" + popSubjectList.getId()));
-        }
-    }
-
-    private void buildStratumPopulation(
-            BuilderContext bc,
-            StratifierGroupPopulationComponent sgpc,
-            List<String> subjectIds,
-            MeasureGroupPopulationComponent population,
-            GroupDef groupDef) {
-        sgpc.setCode(population.getCode());
-        sgpc.setId(population.getId());
-
-        if (population.hasDescription()) {
-            sgpc.addExtension(
-                    MeasureConstants.EXT_POPULATION_DESCRIPTION_URL, new StringType(population.getDescription()));
-        }
-
-        var populationDef = groupDef.populations().stream()
-                .filter(t -> t.code()
-                        .codes()
-                        .get(0)
-                        .code()
-                        .equals(population.getCode().getCodingFirstRep().getCode()))
-                .findFirst()
-                .orElse(null);
-        assert populationDef != null;
-        if (groupDef.isBooleanBasis()) {
-            buildBooleanBasisStratumPopulation(bc, sgpc, subjectIds, populationDef);
-        } else {
-            buildResourceBasisStratumPopulation(bc, sgpc, subjectIds, populationDef, groupDef);
-        }
-    }
-
-    protected String getPopulationResourceIds(Object resourceObject) {
-        var resource = (Resource) resourceObject;
-        return resource.getId();
+        return null;
     }
 
     private void buildPopulation(
-            BuilderContext bc,
+            R4MeasureReportBuilderContext bc,
             MeasureGroupPopulationComponent measurePopulation,
             MeasureReportGroupPopulationComponent reportPopulation,
             PopulationDef populationDef,
@@ -752,7 +269,14 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         if (groupDef.isBooleanBasis()) {
             reportPopulation.setCount(populationDef.getSubjects().size());
         } else {
-            reportPopulation.setCount(populationDef.getResources().size());
+            if (populationDef.type().equals(MeasurePopulationType.MEASUREOBSERVATION)) {
+                // resources has nested maps containing correct qty of resources
+                // Ratio Cont-Variable Measures have two MeasureObservations
+                reportPopulation.setCount(populationDef.countObservations());
+            } else {
+                // standard behavior
+                reportPopulation.setCount(populationDef.getAllSubjectResources().size());
+            }
         }
 
         if (measurePopulation.hasDescription()) {
@@ -768,10 +292,10 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         Set<String> populationSet;
         if (groupDef.isBooleanBasis()) {
             populationSet = populationDef.getSubjects().stream()
-                    .map(t -> ResourceType.Patient.toString().concat("/").concat(t))
+                    .map(FhirResourceUtils::addPatientQualifier)
                     .collect(Collectors.toSet());
         } else {
-            populationSet = populationDef.getResources().stream()
+            populationSet = populationDef.getAllSubjectResources().stream()
                     .filter(Resource.class::isInstance)
                     .map(this::getPopulationResourceIds)
                     .collect(Collectors.toSet());
@@ -786,33 +310,17 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
             bc.addContained(subjectList);
             reportPopulation.setSubjectResults(new Reference("#" + subjectList.getId()));
         }
-
-        // Population Type behavior
-        if (Objects.requireNonNull(populationDef.type()) == MeasurePopulationType.MEASUREOBSERVATION) {
-            buildMeasureObservations(bc, populationDef.expression(), populationDef.getResources());
-        }
     }
 
-    protected void buildMeasureObservations(BuilderContext bc, String observationName, Set<Object> resources) {
-        for (int i = 0; i < resources.size(); i++) {
-            // TODO: Do something with the resource...
-            Observation observation = createMeasureObservation(
-                    bc, "measure-observation-" + observationName + "-" + (i + 1), observationName);
-            bc.addContained(observation);
-        }
+    static ListResource createList(String id) {
+        return (ListResource) new ListResource().setId(id);
     }
 
-    protected ListResource createList(String id) {
-        ListResource list = new ListResource();
-        list.setId(id);
-        return list;
-    }
-
-    protected ListResource createIdList(String id, Collection<String> ids) {
+    private ListResource createIdList(String id, Collection<String> ids) {
         return this.createReferenceList(id, ids.stream().map(Reference::new).collect(Collectors.toList()));
     }
 
-    protected ListResource createReferenceList(String id, Collection<Reference> references) {
+    private ListResource createReferenceList(String id, Collection<Reference> references) {
         ListResource referenceList = createList(id);
         for (Reference reference : references) {
             referenceList.addEntry().setItem(reference);
@@ -821,8 +329,8 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return referenceList;
     }
 
-    protected void addEvaluatedResourceReferences(
-            BuilderContext bc, String criteriaId, Set<Object> evaluatedResources) {
+    private void addEvaluatedResourceReferences(
+            R4MeasureReportBuilderContext bc, String criteriaId, Set<Object> evaluatedResources) {
         if (evaluatedResources == null || evaluatedResources.isEmpty()) {
             return;
         }
@@ -850,7 +358,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
     // Case 5: population - resource types
     // add sde reference with criteria reference extension for each resource
     // if not an evaluated resource, add to contained
-    protected void buildSDE(BuilderContext bc, SdeDef sde) {
+    private void buildSDE(R4MeasureReportBuilderContext bc, SdeDef sde) {
         var report = bc.report();
 
         // No SDEs were calculated, do nothing
@@ -865,16 +373,16 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
 
         CodeableConcept concept = conceptDefToConcept(sde.code());
 
-        Map<ValueWrapper, Long> accumulated = sde.getResults().values().stream()
+        Map<StratumValueWrapper, Long> accumulated = sde.getResults().values().stream()
                 .flatMap(x -> Lists.newArrayList(x.iterableValue()).stream())
                 .filter(Objects::nonNull)
-                .map(ValueWrapper::new)
+                .map(StratumValueWrapper::new)
                 .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
 
-        for (Map.Entry<ValueWrapper, Long> accumulator : accumulated.entrySet()) {
+        for (Map.Entry<StratumValueWrapper, Long> accumulator : accumulated.entrySet()) {
 
             Resource obs;
-            if (!(accumulator.getKey().getValue() instanceof Resource)) {
+            if (!(accumulator.getKey().getValue() instanceof Resource resource)) {
                 String valueCode = accumulator.getKey().getValueAsString();
                 Long valueCount = accumulator.getValue();
 
@@ -889,13 +397,12 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
 
                 bc.addCriteriaExtensionToSupplementalData(obs, sde.id());
             } else {
-                Resource r = (Resource) accumulator.getKey().getValue();
-                bc.addCriteriaExtensionToSupplementalData(r, sde.id());
+                bc.addCriteriaExtensionToSupplementalData(resource, sde.id());
             }
         }
     }
 
-    protected void buildSDEs(BuilderContext bc) {
+    private void buildSDEs(R4MeasureReportBuilderContext bc) {
         var measure = bc.measure();
         var measureDef = bc.measureDef();
         // ASSUMPTION: Measure SDEs are in the same order as MeasureDef SDEs
@@ -924,7 +431,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return cd;
     }
 
-    protected MeasureReport createMeasureReport(
+    private MeasureReport createMeasureReport(
             Measure measure,
             MeasureDef measureDef,
             MeasureReportType type,
@@ -959,7 +466,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return report;
     }
 
-    protected Extension createMeasureInfoExtension(MeasureInfo measureInfo) {
+    private Extension createMeasureInfoExtension(MeasureInfo measureInfo) {
 
         Extension extExtMeasure =
                 new Extension().setUrl(MeasureInfo.MEASURE).setValue(new CanonicalType(measureInfo.getMeasure()));
@@ -1005,8 +512,8 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return measureUsageConcept;
     }
 
-    protected DomainResource createPopulationObservation(
-            BuilderContext bc,
+    private DomainResource createPopulationObservation(
+            R4MeasureReportBuilderContext bc,
             String id,
             String populationId,
             Coding valueCoding,
@@ -1029,8 +536,12 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return obs;
     }
 
-    protected DomainResource createPatientObservation(
-            BuilderContext bc, String id, String populationId, Coding valueCoding, CodeableConcept originalConcept) {
+    private DomainResource createPatientObservation(
+            R4MeasureReportBuilderContext bc,
+            String id,
+            String populationId,
+            Coding valueCoding,
+            CodeableConcept originalConcept) {
 
         Observation obs = createObservation(bc, id, populationId);
 
@@ -1042,7 +553,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return obs;
     }
 
-    protected Observation createObservation(BuilderContext bc, String id, String populationId) {
+    private Observation createObservation(R4MeasureReportBuilderContext bc, String id, String populationId) {
         var measure = bc.measure();
         MeasureInfo measureInfo = new MeasureInfo()
                 .withMeasure(
@@ -1062,7 +573,7 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return obs;
     }
 
-    protected Observation createMeasureObservation(BuilderContext bc, String id, String observationName) {
+    private Observation createMeasureObservation(R4MeasureReportBuilderContext bc, String id, String observationName) {
         Observation obs = this.createObservation(bc, id, observationName);
         CodeableConcept cc = new CodeableConcept();
         cc.setText(observationName);
@@ -1070,134 +581,171 @@ public class R4MeasureReportBuilder implements MeasureReportBuilder<Measure, Mea
         return obs;
     }
 
-    // This is some hackery because most of these objects don't implement
-    // hashCode or equals, meaning it's hard to detect distinct values;
-    class ValueWrapper {
-        protected Object value;
+    /**
+     * Copy scores from MeasureDef to MeasureReport.
+     *
+     * <p>Logic is driven by Def objects, matching report structures by ID.
+     * Logs warnings when matching report structures are not found.
+     *
+     * @param bc the builder context
+     */
+    private void copyScoresFromDef(R4MeasureReportBuilderContext bc) {
+        var report = bc.report();
+        var measureDef = bc.measureDef();
 
-        public ValueWrapper(Object value) {
-            this.value = value;
-        }
+        // Iterate through GroupDefs (drive from Def side)
+        for (var groupDef : measureDef.groups()) {
+            MeasureReportGroupComponent reportGroup;
 
-        @Override
-        public int hashCode() {
-            return this.getKey().hashCode();
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null) return false;
-            if (this.getClass() != o.getClass()) return false;
-
-            ValueWrapper other = (ValueWrapper) o;
-
-            if (other.getValue() == null ^ this.getValue() == null) {
-                return false;
-            }
-
-            if (other.getValue() == null && this.getValue() == null) {
-                return true;
-            }
-
-            return this.getKey().equals(other.getKey());
-        }
-
-        public String getKey() {
-            String key = null;
-            if (value instanceof Coding coding) {
-                Coding c = coding;
-                // ASSUMPTION: We won't have different systems with the same code
-                // within a given stratifier / sde
-                key = joinValues("coding", c.getCode());
-            } else if (value instanceof CodeableConcept concept) {
-                CodeableConcept c = concept;
-                key = joinValues("codeable-concept", c.getCodingFirstRep().getCode());
-            } else if (value instanceof Code c) {
-                key = joinValues("code", c.getCode());
-            } else if (value instanceof Enum<?> e) {
-                key = joinValues("enum", e.toString());
-            } else if (value instanceof IPrimitiveType<?> p) {
-                key = joinValues("primitive", p.getValueAsString());
-            } else if (value instanceof Identifier identifier) {
-                key = identifier.getValue();
-            } else if (value instanceof Resource resource) {
-                key = resource.getIdElement().toVersionless().getValue();
-            } else if (value != null) {
-                key = value.toString();
-            }
-
-            if (key == null) {
-                throw new InvalidRequestException("found a null key for the wrapped value: %s".formatted(value));
-            }
-
-            return key;
-        }
-
-        public String getValueAsString() {
-            if (value instanceof Coding coding) {
-                Coding c = coding;
-                return c.getCode();
-            } else if (value instanceof CodeableConcept concept) {
-                CodeableConcept c = concept;
-                return c.getCodingFirstRep().getCode();
-            } else if (value instanceof Code c) {
-                return c.getCode();
-            } else if (value instanceof Enum<?> e) {
-                return e.toString();
-            } else if (value instanceof IPrimitiveType<?> p) {
-                return p.getValueAsString();
-            } else if (value instanceof Identifier identifier) {
-                return identifier.getValue();
-            } else if (value instanceof Resource resource) {
-                return resource.getIdElement().toVersionless().getValue();
-            } else if (value != null) {
-                return value.toString();
+            // For single-group measures, use positional matching (no ID required)
+            // For multi-group measures, match by ID
+            if (report.getGroup().size() == 1) {
+                reportGroup = report.getGroupFirstRep();
             } else {
-                return "<null>";
+                // Multi-group: match by ID
+                reportGroup = report.getGroup().stream()
+                        .filter(rg -> groupDef.id() != null && groupDef.id().equals(rg.getId()))
+                        .findFirst()
+                        .orElse(null);
+            }
+
+            if (reportGroup == null) {
+                logger.warn("No matching MeasureReport group found for GroupDef with id: {}", groupDef.id());
+                continue;
+            }
+
+            // Copy group-level score
+            Double groupScore = groupDef.getScore();
+            if (groupScore != null) {
+                reportGroup.getMeasureScore().setValue(groupScore);
+            }
+
+            copyPopulationAggregationResults(reportGroup, groupDef);
+
+            // Copy stratifier scores
+            copyStratifierScores(reportGroup, groupDef);
+        }
+    }
+
+    private void copyPopulationAggregationResults(MeasureReportGroupComponent reportGroup, GroupDef groupDef) {
+        for (MeasureReportGroupPopulationComponent fhirPopulation : reportGroup.getPopulation()) {
+            var populationDef = groupDef.findPopulationById(fhirPopulation.getId());
+            populateAggregationResultExtension(fhirPopulation, populationDef);
+        }
+    }
+
+    private static void populateAggregationResultExtension(
+            MeasureReportGroupPopulationComponent measurePopulation, PopulationDef populationDef) {
+
+        // Add either the aggregation result to the numerator or denominator, if applicable
+        Optional.ofNullable(populationDef.getAggregationResult())
+                .ifPresent(nonNullAggregationResult -> measurePopulation.addExtension(
+                        MeasureConstants.EXT_AGGREGATION_METHOD_RESULT, new DecimalType(nonNullAggregationResult)));
+    }
+
+    /**
+     * Copy stratifier scores from StratifierDef objects to MeasureReport stratifiers.
+     * Logic is driven by StratifierDef objects, matching report stratifiers by ID.
+     *
+     * @param reportGroup the MeasureReport group component
+     * @param groupDef the GroupDef containing stratifier scores
+     */
+    private void copyStratifierScores(MeasureReportGroupComponent reportGroup, GroupDef groupDef) {
+        // Iterate through StratifierDefs (drive from Def side)
+        for (var stratifierDef : groupDef.stratifiers()) {
+            // Find matching report stratifier by ID
+            var reportStratifier = reportGroup.getStratifier().stream()
+                    .filter(rs -> stratifierDef.id().equals(rs.getId()))
+                    .findFirst()
+                    .orElse(null);
+
+            if (reportStratifier == null) {
+                logger.warn(
+                        "No matching MeasureReport stratifier found for StratifierDef with id: {}", stratifierDef.id());
+                continue;
+            }
+
+            // Iterate through StratumDefs (drive from Def side)
+            for (var stratumDef : stratifierDef.getStratum()) {
+                // Find matching report stratum by comparing value strings
+                var reportStratum = reportStratifier.getStratum().stream()
+                        .filter(rs -> matchesStratumValue(rs, stratumDef))
+                        .findFirst()
+                        .orElse(null);
+
+                if (reportStratum == null) {
+                    logger.debug(
+                            "No matching MeasureReport stratum found for StratumDef in stratifier: {}",
+                            stratifierDef.id());
+                    continue;
+                }
+
+                // Copy stratum score
+                Double stratumScore = stratumDef.getScore();
+                if (stratumScore != null) {
+                    reportStratum.getMeasureScore().setValue(stratumScore);
+                }
             }
         }
+    }
 
-        public String getDescription() {
-            if (value instanceof Coding coding) {
-                Coding c = coding;
-                return c.hasDisplay() ? c.getDisplay() : c.getCode();
-            } else if (value instanceof CodeableConcept concept) {
-                CodeableConcept c = concept;
-                return c.getCodingFirstRep().hasDisplay()
-                        ? c.getCodingFirstRep().getDisplay()
-                        : c.getCodingFirstRep().getCode();
-            } else if (value instanceof Code c) {
-                return c.getDisplay() != null ? c.getDisplay() : c.getCode();
-            } else if (value instanceof Enum<?> e) {
-                return e.toString();
-            } else if (value instanceof IPrimitiveType<?> p) {
-                return p.getValueAsString();
-            } else if (value instanceof Identifier identifier) {
-                return identifier.getValue();
-            } else if (value instanceof Resource resource) {
-                return resource.getIdElement().toVersionless().getValue();
-            } else if (value != null) {
-                return value.toString();
+    /**
+     * Check if a MeasureReport stratum matches a StratumDef by comparing text representations.
+     * Uses text-based comparison to match R4MeasureReportScorer behavior.
+     * Added in Part 1 to fix Gap 1 (text-based stratum matching).
+     *
+     * <p><strong>CRITICAL:</strong> This method uses CodeableConcept.text comparison instead of
+     * coding codes. This prevents 17 test failures in RATIO and CONTINUOUSVARIABLE measures
+     * with stratifiers when old scorers are removed in Part 2.
+     *
+     * @param reportStratum the MeasureReport stratum
+     * @param stratumDef the StratumDef
+     * @return true if values match
+     */
+    private boolean matchesStratumValue(MeasureReport.StratifierGroupComponent reportStratum, StratumDef stratumDef) {
+        // Use the same logic as R4MeasureReportScorer: compare CodeableConcept.text
+        String reportText = reportStratum.hasValue() ? reportStratum.getValue().getText() : null;
+        String defText = getStratumDefText(stratumDef);
+        return Objects.equals(reportText, defText);
+    }
+
+    /**
+     * Extract text representation from StratumDef for matching.
+     * Based on R4MeasureReportScorer#getStratumDefTextForR4.
+     * Added in Part 1 to fix Gap 1 (text-based stratum matching).
+     *
+     * @param stratumDef the StratumDef
+     * @return text representation of the stratum value
+     */
+    private String getStratumDefText(StratumDef stratumDef) {
+        String stratumText = null;
+
+        for (StratumValueDef valuePair : stratumDef.valueDefs()) {
+            var value = valuePair.value();
+            var componentDef = valuePair.def();
+
+            // Handle CodeableConcept values
+            if (value.getValueClass().equals(org.hl7.fhir.r4.model.CodeableConcept.class)) {
+                if (stratumDef.isComponent()) {
+                    // component stratifier: use code text
+                    stratumText = componentDef != null && componentDef.code() != null
+                            ? componentDef.code().text()
+                            : null;
+                } else {
+                    // non-component: extract text from CodeableConcept value
+                    if (value.getValue() instanceof org.hl7.fhir.r4.model.CodeableConcept codeableConcept) {
+                        stratumText = codeableConcept.getText();
+                    }
+                }
+            } else if (stratumDef.isComponent()) {
+                // Component with non-CodeableConcept value: convert to string
+                stratumText = value.getValueAsString();
             } else {
-                return null;
+                // Non-component with non-CodeableConcept value: convert to string
+                stratumText = value.getValueAsString();
             }
         }
 
-        public Object getValue() {
-            return this.value;
-        }
-
-        public Class<?> getValueClass() {
-            if (this.value == null) {
-                return String.class;
-            }
-
-            return this.value.getClass();
-        }
-
-        private String joinValues(String... elements) {
-            return String.join("-", elements);
-        }
+        return stratumText;
     }
 }

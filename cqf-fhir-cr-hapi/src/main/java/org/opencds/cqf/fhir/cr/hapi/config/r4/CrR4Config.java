@@ -9,8 +9,11 @@ import java.util.Map;
 import org.opencds.cqf.fhir.cql.EvaluationSettings;
 import org.opencds.cqf.fhir.cr.cpg.r4.R4CqlExecutionService;
 import org.opencds.cqf.fhir.cr.crmi.R4ApproveService;
+import org.opencds.cqf.fhir.cr.crmi.R4DraftService;
+import org.opencds.cqf.fhir.cr.crmi.R4PackageService;
+import org.opencds.cqf.fhir.cr.crmi.R4ReleaseService;
+import org.opencds.cqf.fhir.cr.ecr.r4.R4ERSDTransformService;
 import org.opencds.cqf.fhir.cr.hapi.common.StringTimePeriodHandler;
-import org.opencds.cqf.fhir.cr.hapi.config.CrBaseConfig;
 import org.opencds.cqf.fhir.cr.hapi.config.ProviderLoader;
 import org.opencds.cqf.fhir.cr.hapi.config.ProviderSelector;
 import org.opencds.cqf.fhir.cr.hapi.config.RepositoryConfig;
@@ -19,12 +22,20 @@ import org.opencds.cqf.fhir.cr.hapi.r4.ICareGapsServiceFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.ICollectDataServiceFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.ICqlExecutionServiceFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.IDataRequirementsServiceFactory;
+import org.opencds.cqf.fhir.cr.hapi.r4.IDraftServiceFactory;
+import org.opencds.cqf.fhir.cr.hapi.r4.IERSDV2ImportServiceFactory;
+import org.opencds.cqf.fhir.cr.hapi.r4.IPackageServiceFactory;
+import org.opencds.cqf.fhir.cr.hapi.r4.IReleaseServiceFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.ISubmitDataProcessorFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.R4MeasureEvaluatorMultipleFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.R4MeasureEvaluatorSingleFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.R4MeasureServiceUtilsFactory;
 import org.opencds.cqf.fhir.cr.hapi.r4.cpg.CqlExecutionOperationProvider;
 import org.opencds.cqf.fhir.cr.hapi.r4.crmi.ApproveProvider;
+import org.opencds.cqf.fhir.cr.hapi.r4.crmi.DraftProvider;
+import org.opencds.cqf.fhir.cr.hapi.r4.crmi.PackageProvider;
+import org.opencds.cqf.fhir.cr.hapi.r4.crmi.ReleaseProvider;
+import org.opencds.cqf.fhir.cr.hapi.r4.ecr.ERSDTransformProvider;
 import org.opencds.cqf.fhir.cr.hapi.r4.measure.CareGapsOperationProvider;
 import org.opencds.cqf.fhir.cr.hapi.r4.measure.CollectDataOperationProvider;
 import org.opencds.cqf.fhir.cr.hapi.r4.measure.DataRequirementsOperationProvider;
@@ -45,8 +56,17 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
+@SuppressWarnings("UnstableApiUsage")
 @Configuration
-@Import({RepositoryConfig.class, CrBaseConfig.class, ReleaseOperationConfig.class})
+@Import({
+    RepositoryConfig.class,
+    ReleaseOperationConfig.class,
+    DeleteOperationConfig.class,
+    RetireOperationConfig.class,
+    WithdrawOperationConfig.class,
+    ReviseOperationConfig.class,
+    ArtifactDiffOperationConfig.class
+})
 public class CrR4Config {
 
     @Bean
@@ -135,6 +155,16 @@ public class CrR4Config {
     }
 
     @Bean
+    IDraftServiceFactory draftServiceFactory(IRepositoryFactory repositoryFactory) {
+        return rd -> new R4DraftService(repositoryFactory.create(rd));
+    }
+
+    @Bean
+    DraftProvider r4DraftProvider(IDraftServiceFactory r4DraftServiceFactory) {
+        return new DraftProvider(r4DraftServiceFactory);
+    }
+
+    @Bean
     IApproveServiceFactory approveServiceFactory(IRepositoryFactory repositoryFactory) {
         return rd -> new R4ApproveService(repositoryFactory.create(rd));
     }
@@ -142,6 +172,36 @@ public class CrR4Config {
     @Bean
     ApproveProvider r4ApproveProvider(IApproveServiceFactory r4ApproveServiceFactory) {
         return new ApproveProvider(r4ApproveServiceFactory);
+    }
+
+    @Bean
+    IERSDV2ImportServiceFactory ersdV2ImportServiceFactory(IRepositoryFactory repositoryFactory) {
+        return rd -> new R4ERSDTransformService(repositoryFactory.create(rd));
+    }
+
+    @Bean
+    ERSDTransformProvider eRSDTransformProvider(IERSDV2ImportServiceFactory ersdV2ImportServiceFactory) {
+        return new ERSDTransformProvider(ersdV2ImportServiceFactory);
+    }
+
+    @Bean
+    IPackageServiceFactory packageServiceFactory(IRepositoryFactory repositoryFactory) {
+        return rd -> new R4PackageService(repositoryFactory.create(rd));
+    }
+
+    @Bean
+    PackageProvider r4PackageProvider(IPackageServiceFactory r4PackageServiceFactory) {
+        return new PackageProvider(r4PackageServiceFactory);
+    }
+
+    @Bean
+    IReleaseServiceFactory releaseServiceFactory(IRepositoryFactory repositoryFactory) {
+        return rd -> new R4ReleaseService(repositoryFactory.create(rd));
+    }
+
+    @Bean
+    ReleaseProvider r4ReleaseProvider(IReleaseServiceFactory r4ReleaseServiceFactory) {
+        return new ReleaseProvider(r4ReleaseServiceFactory);
     }
 
     @Bean
@@ -173,7 +233,11 @@ public class CrR4Config {
                                 CqlExecutionOperationProvider.class,
                                 CollectDataOperationProvider.class,
                                 DataRequirementsOperationProvider.class,
-                                ApproveProvider.class)));
+                                DraftProvider.class,
+                                ApproveProvider.class,
+                                ERSDTransformProvider.class,
+                                PackageProvider.class,
+                                ReleaseProvider.class)));
 
         return new ProviderLoader(restfulServer, applicationContext, selector);
     }

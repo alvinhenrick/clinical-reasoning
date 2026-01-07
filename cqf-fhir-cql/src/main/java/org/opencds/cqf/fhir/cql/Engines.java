@@ -17,6 +17,8 @@ import org.cqframework.fhir.npm.ILibraryReader;
 import org.cqframework.fhir.npm.NpmLibrarySourceProvider;
 import org.cqframework.fhir.npm.NpmModelInfoProvider;
 import org.cqframework.fhir.utilities.LoggerAdapter;
+import org.hl7.cql.model.ModelInfoProvider;
+import org.hl7.cql.model.NamespaceInfo;
 import org.hl7.fhir.instance.model.api.IBaseBundle;
 import org.opencds.cqf.cql.engine.data.DataProvider;
 import org.opencds.cqf.cql.engine.debug.DebugMap;
@@ -26,6 +28,7 @@ import org.opencds.cqf.cql.engine.fhir.converter.FhirTypeConverterFactory;
 import org.opencds.cqf.cql.engine.retrieve.RetrieveProvider;
 import org.opencds.cqf.cql.engine.terminology.TerminologyProvider;
 import org.opencds.cqf.fhir.cql.cql2elm.content.RepositoryFhirLibrarySourceProvider;
+import org.opencds.cqf.fhir.cql.cql2elm.content.RepositoryFhirModelInfoProvider;
 import org.opencds.cqf.fhir.cql.cql2elm.util.LibraryVersionSelector;
 import org.opencds.cqf.fhir.cql.engine.parameters.CqlFhirParametersConverter;
 import org.opencds.cqf.fhir.cql.engine.retrieve.FederatedDataProvider;
@@ -39,6 +42,7 @@ import org.opencds.cqf.fhir.utility.repository.InMemoryFhirRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+@SuppressWarnings("UnstableApiUsage")
 public class Engines {
 
     private static Logger logger = LoggerFactory.getLogger(Engines.class);
@@ -79,9 +83,28 @@ public class Engines {
                 modelManager, settings.getCqlOptions().getCqlCompilerOptions(), settings.getLibraryCache());
 
         registerLibrarySourceProviders(settings, libraryManager, repository);
+        registerModelInfoProviders(settings, modelManager, repository);
         registerNpmSupport(settings, libraryManager, modelManager);
 
+        // Manually registering Using CQL and US CQL Common namespace for now
+        libraryManager
+                .getNamespaceManager()
+                .ensureNamespaceRegistered(new NamespaceInfo("hl7.fhir.uv.cql", "http://hl7.org/fhir/uv/cql"));
+        libraryManager
+                .getNamespaceManager()
+                .ensureNamespaceRegistered(new NamespaceInfo("hl7.fhir.us.cql", "http://hl7.org/fhir/us/cql"));
+
         return new Environment(libraryManager, dataProviders, terminologyProvider);
+    }
+
+    private static void registerModelInfoProviders(
+            EvaluationSettings settings, ModelManager manager, IRepository repository) {
+        var loader = manager.getModelInfoLoader();
+
+        // TODO: Add a 'useEmbeddedModelInfo' setting?
+        // TODO: Add support for providers in the settings?
+
+        loader.registerModelInfoProvider(buildModelInfo(repository));
     }
 
     private static void registerLibrarySourceProviders(
@@ -134,6 +157,12 @@ public class Engines {
         }
     }
 
+    private static ModelInfoProvider buildModelInfo(IRepository repository) {
+        var adapterFactory = IAdapterFactory.forFhirContext(repository.fhirContext());
+        return new RepositoryFhirModelInfoProvider(
+                repository, adapterFactory, new LibraryVersionSelector(adapterFactory));
+    }
+
     private static LibrarySourceProvider buildLibrarySource(IRepository repository) {
         var adapterFactory = IAdapterFactory.forFhirContext(repository.fhirContext());
         return new RepositoryFhirLibrarySourceProvider(
@@ -169,7 +198,7 @@ public class Engines {
                 environment, settings.getCqlOptions().getCqlEngineOptions().getOptions());
         if (settings.getCqlOptions().getCqlEngineOptions().isDebugLoggingEnabled()) {
             var map = new DebugMap();
-            map.setIsLoggingEnabled(true);
+            map.setLoggingEnabled(true);
             engine.getState().setDebugMap(map);
         }
 

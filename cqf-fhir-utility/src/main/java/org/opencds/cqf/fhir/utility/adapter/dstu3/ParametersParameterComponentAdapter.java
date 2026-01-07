@@ -1,46 +1,37 @@
 package org.opencds.cqf.fhir.utility.adapter.dstu3;
 
-import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.context.FhirVersionEnum;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import org.hl7.fhir.dstu3.model.Parameters;
 import org.hl7.fhir.dstu3.model.Parameters.ParametersParameterComponent;
 import org.hl7.fhir.dstu3.model.Resource;
 import org.hl7.fhir.dstu3.model.Type;
+import org.hl7.fhir.instance.model.api.IBase;
 import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
 import org.hl7.fhir.instance.model.api.IBaseDatatype;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.instance.model.api.IPrimitiveType;
-import org.opencds.cqf.cql.engine.model.ModelResolver;
-import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
+import org.opencds.cqf.fhir.utility.adapter.BaseAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IParametersParameterComponentAdapter;
-import org.opencds.cqf.fhir.utility.model.FhirModelResolverCache;
 
-class ParametersParameterComponentAdapter implements IParametersParameterComponentAdapter {
+class ParametersParameterComponentAdapter extends BaseAdapter implements IParametersParameterComponentAdapter {
 
-    private final FhirContext fhirContext = FhirContext.forDstu3Cached();
     private final Parameters.ParametersParameterComponent parametersParameterComponent;
-    private final ModelResolver modelResolver;
-    private final IAdapterFactory adapterFactory;
 
     protected ParametersParameterComponent getParametersParameterComponent() {
         return parametersParameterComponent;
     }
 
-    public ParametersParameterComponentAdapter(IBaseBackboneElement parametersParameterComponent) {
-        if (parametersParameterComponent == null) {
-            throw new IllegalArgumentException("parametersParameterComponent can not be null");
-        }
-
+    public ParametersParameterComponentAdapter(IBase parametersParameterComponent) {
+        super(FhirVersionEnum.DSTU3, parametersParameterComponent);
         if (!parametersParameterComponent.fhirType().equals("Parameters.parameter")) {
             throw new IllegalArgumentException(
                     "element passed as parametersParameterComponent argument is not a ParametersParameterComponent Element");
         }
 
         this.parametersParameterComponent = (ParametersParameterComponent) parametersParameterComponent;
-        modelResolver = FhirModelResolverCache.resolverForVersion(
-                fhirContext.getVersion().getVersion());
-        adapterFactory = IAdapterFactory.forFhirContext(fhirContext);
     }
 
     @Override
@@ -66,11 +57,13 @@ class ParametersParameterComponentAdapter implements IParametersParameterCompone
     }
 
     @Override
-    public List<IBaseDatatype> getPartValues(String name) {
+    public List<IBase> getPartValues(String name) {
         return this.parametersParameterComponent.getPart().stream()
                 .filter(p -> p.getName().equals(name))
-                .map(ParametersParameterComponent::getValue)
-                .collect(Collectors.toList());
+                .map(p -> p.hasResource() ? p.getResource() : p.getValue())
+                .filter(Objects::nonNull)
+                .map(IBase.class::cast)
+                .toList();
     }
 
     @Override
@@ -136,12 +129,7 @@ class ParametersParameterComponentAdapter implements IParametersParameterCompone
     }
 
     @Override
-    public FhirContext fhirContext() {
-        return fhirContext;
-    }
-
-    @Override
-    public ModelResolver getModelResolver() {
-        return modelResolver;
+    public IBase newTupleWithParts() {
+        return null;
     }
 }

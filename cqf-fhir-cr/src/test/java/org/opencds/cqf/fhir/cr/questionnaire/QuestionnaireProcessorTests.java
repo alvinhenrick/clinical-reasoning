@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.opencds.cqf.fhir.cr.questionnaire.TestQuestionnaire.CLASS_PATH;
 import static org.opencds.cqf.fhir.cr.questionnaire.TestQuestionnaire.given;
 import static org.opencds.cqf.fhir.test.Resources.getResourcePath;
-import static org.opencds.cqf.fhir.utility.Parameters.newParameters;
 import static org.opencds.cqf.fhir.utility.Parameters.newPart;
 import static org.opencds.cqf.fhir.utility.Parameters.newStringPart;
 import static org.opencds.cqf.fhir.utility.VersionUtilities.canonicalTypeForVersion;
@@ -19,8 +18,12 @@ import ca.uhn.fhir.repository.IRepository;
 import ca.uhn.fhir.rest.server.exceptions.ResourceNotFoundException;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
+import org.hl7.fhir.r4.model.IdType;
 import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Practitioner;
 import org.hl7.fhir.r4.model.QuestionnaireResponse;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -29,10 +32,11 @@ import org.opencds.cqf.fhir.cr.questionnaire.generate.GenerateProcessor;
 import org.opencds.cqf.fhir.cr.questionnaire.populate.PopulateProcessor;
 import org.opencds.cqf.fhir.cr.questionnaireresponse.TestQuestionnaireResponse;
 import org.opencds.cqf.fhir.utility.BundleHelper;
+import org.opencds.cqf.fhir.utility.Constants;
 import org.opencds.cqf.fhir.utility.Ids;
 import org.opencds.cqf.fhir.utility.repository.ig.IgRepository;
 
-@SuppressWarnings("squid:S2699")
+@SuppressWarnings({"squid:S2699", "UnstableApiUsage"})
 class QuestionnaireProcessorTests {
     private final FhirContext fhirContextR4 = FhirContext.forR4Cached();
     private final FhirContext fhirContextR5 = FhirContext.forR5Cached();
@@ -60,8 +64,17 @@ class QuestionnaireProcessorTests {
         given().repository(repositoryR4)
                 .when()
                 .questionnaireId(Ids.newId(fhirContextR4, "Questionnaire", "OutpatientPriorAuthorizationRequest"))
-                .subjectId("OPA-Patient1")
-                .parameters(newParameters(fhirContextR4, newStringPart(fhirContextR4, "ClaimId", "OPA-Claim1")))
+                .context(List.of(
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "patient"),
+                                newPart(fhirContextR4, "Reference", "content", "OPA-Patient1")),
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "Claim"),
+                                newPart(fhirContextR4, "Reference", "content", "OPA-Claim1"))))
                 .thenPopulate(true)
                 .hasItems(35)
                 .itemHasAnswerValue("1.1", new org.hl7.fhir.r4.model.StringType("Acme Clinic"));
@@ -69,8 +82,17 @@ class QuestionnaireProcessorTests {
         given().repository(repositoryR4)
                 .when()
                 .questionnaireId(Ids.newId(fhirContextR4, "Questionnaire", "definition"))
-                .subjectId("OPA-Patient1")
-                .parameters(newParameters(fhirContextR4, newStringPart(fhirContextR4, "ClaimId", "OPA-Claim1")))
+                .context(List.of(
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "patient"),
+                                newPart(fhirContextR4, "Reference", "content", "OPA-Patient1")),
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "Claim"),
+                                newPart(fhirContextR4, "Reference", "content", "OPA-Claim1"))))
                 .thenPopulate(true)
                 .hasItems(2)
                 .hasNoErrors()
@@ -85,7 +107,6 @@ class QuestionnaireProcessorTests {
                 .when()
                 .questionnaireId(Ids.newId(fhirContextR5, "Questionnaire", "OutpatientPriorAuthorizationRequest"))
                 .subjectId("OPA-Patient1")
-                .parameters(newParameters(fhirContextR5, newStringPart(fhirContextR5, "ClaimId", "OPA-Claim1")))
                 .thenPopulate(false);
     }
 
@@ -96,7 +117,6 @@ class QuestionnaireProcessorTests {
                 .questionnaireId(
                         Ids.newId(fhirContextR4, "Questionnaire", "OutpatientPriorAuthorizationRequest-noLibrary"))
                 .subjectId("OPA-Patient1")
-                .parameters(newParameters(fhirContextR4, newStringPart(fhirContextR4, "ClaimId", "OPA-Claim1")))
                 .thenPopulate(true)
                 .hasItems(35)
                 .hasErrors();
@@ -109,7 +129,6 @@ class QuestionnaireProcessorTests {
                 .questionnaireId(
                         Ids.newId(fhirContextR4, "Questionnaire", "OutpatientPriorAuthorizationRequest-Errors"))
                 .subjectId("OPA-Patient1")
-                .parameters(newParameters(fhirContextR4, newStringPart(fhirContextR4, "ClaimId", "OPA-Claim1")))
                 .thenPopulate(true)
                 .hasErrors();
     }
@@ -131,7 +150,7 @@ class QuestionnaireProcessorTests {
     }
 
     @Test
-    void populateWithLaunchContextResolvesParametersR4() {
+    void populateWithLaunchContextResolvesReferenceParametersR4() {
         given().repository(repositoryR4)
                 .when()
                 .questionnaireId(Ids.newId(
@@ -148,6 +167,32 @@ class QuestionnaireProcessorTests {
                                 "context",
                                 newStringPart(fhirContextR4, "name", "patient"),
                                 newPart(fhirContextR4, "Reference", "content", "Patient/OPA-Patient1"))))
+                .thenPopulate(true)
+                .hasItems(14)
+                .hasNoErrors()
+                .itemHasAnswer("family-name")
+                .itemHasAnswer("provider-name");
+    }
+
+    @Test
+    void populateWithLaunchContextResolvesResourceParametersR4() {
+        var patient = repositoryR4.read(Patient.class, new IdType("Patient", "OPA-Patient1"));
+        var practitioner = repositoryR4.read(Practitioner.class, new IdType("Practitioner", "OPA-AttendingPhysician1"));
+        given().repository(repositoryR4)
+                .when()
+                .questionnaireId(Ids.newId(
+                        fhirContextR4, "Questionnaire", "questionnaire-sdc-test-fhirpath-prepop-initialexpression"))
+                .context(Arrays.asList(
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "user"),
+                                newPart(fhirContextR4, "content", practitioner)),
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "patient"),
+                                newPart(fhirContextR4, "content", patient))))
                 .thenPopulate(true)
                 .hasItems(14)
                 .hasNoErrors()
@@ -211,7 +256,7 @@ class QuestionnaireProcessorTests {
                 .when()
                 .questionnaireId(Ids.newId(fhirContextR4, "Questionnaire", "OutpatientPriorAuthorizationRequest"))
                 .thenDataRequirements()
-                .hasDataRequirements(30);
+                .hasDataRequirements(19);
     }
 
     @Test
@@ -220,7 +265,7 @@ class QuestionnaireProcessorTests {
                 .when()
                 .questionnaireId(Ids.newId(fhirContextR5, "Questionnaire", "OutpatientPriorAuthorizationRequest"))
                 .thenDataRequirements()
-                .hasDataRequirements(30);
+                .hasDataRequirements(19);
     }
 
     @Test
@@ -228,12 +273,27 @@ class QuestionnaireProcessorTests {
         given().repositoryFor(fhirContextR4, "r4/pa-aslp")
                 .when()
                 .questionnaireId(Ids.newId(fhirContextR4, "Questionnaire", "ASLPA1"))
-                .subjectId("positive")
-                .parameters(newParameters(
-                        fhirContextR4,
-                        newStringPart(fhirContextR4, "Service Request Id", "SleepStudy"),
-                        newStringPart(fhirContextR4, "Service Request Id", "SleepStudy2"),
-                        newStringPart(fhirContextR4, "Coverage Id", "Coverage-positive")))
+                .context(Arrays.asList(
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "patient"),
+                                newPart(fhirContextR4, "Reference", "content", "Patient/positive")),
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "ServiceRequest"),
+                                newPart(fhirContextR4, "Reference", "content", "ServiceRequest/SleepStudy")),
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "ServiceRequest"),
+                                newPart(fhirContextR4, "Reference", "content", "ServiceRequest/SleepStudy2")),
+                        (IBaseBackboneElement) newPart(
+                                fhirContextR4,
+                                "context",
+                                newStringPart(fhirContextR4, "name", "Coverage"),
+                                newPart(fhirContextR4, "Reference", "content", "Coverage/Coverage-positive"))))
                 .thenPopulate(true)
                 .hasItems(10)
                 .itemHasAnswer("1")
@@ -272,11 +332,12 @@ class QuestionnaireProcessorTests {
                 .profileId(Ids.newId(fhirContextR4, "StructureDefinition", "LaunchContexts"))
                 .thenGenerate()
                 .hasItems(2)
-                .questionnaire;
+                .hasExtensions(Constants.SDC_QUESTIONNAIRE_LAUNCH_CONTEXT, 5)
+                .questionnaire
+                .get();
         var questionnaireResponse = (QuestionnaireResponse) given().repository(repositoryR4)
                 .when()
                 .questionnaire(questionnaire)
-                .subjectId(patientId)
                 .context(Arrays.asList(
                         (IBaseBackboneElement) newPart(
                                 fhirContextR4,
@@ -293,7 +354,8 @@ class QuestionnaireProcessorTests {
                 .hasItems(2)
                 .itemHasAnswer("1.1")
                 .itemHasAuthorExt("1.1")
-                .questionnaireResponse;
+                .questionnaireResponse
+                .get();
         assertEquals("Patient/" + patientId, questionnaireResponse.getSubject().getReference());
         assertNotNull(questionnaireResponse.getAuthored());
         var bundle = TestQuestionnaireResponse.given()
@@ -337,6 +399,9 @@ class QuestionnaireProcessorTests {
                 .itemHasAnswerValue(
                         "test-requested|diagnosis-description",
                         "Type 2 diabetes mellitus with other diabetic arthropathy")
-                .itemHasAnswer("history|other-findings");
+                .itemHasAnswerValue("history|patient-history|diagnosis", "E11.618")
+                .itemHasAnswerValue("history|patient-history|age-at-onset", "22")
+                .itemHasNoAnswer("history|patient-history|abatement")
+                .itemHasNoAnswer("history|other-findings");
     }
 }

@@ -7,25 +7,35 @@ import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
  * This interface exposes common functionality across all FHIR ValueSet versions.
  */
 public interface IValueSetAdapter extends IKnowledgeArtifactAdapter {
-    public <T extends IBaseBackboneElement> void setExpansion(T expansion);
+    IValueSetAdapter addUseContext(IUsageContextAdapter usageContext);
 
-    public <T extends IBaseBackboneElement> T getExpansion();
+    <T extends IBaseBackboneElement> void setExpansion(T expansion);
 
-    public boolean hasExpansion();
+    <T extends IBaseBackboneElement> T getExpansion();
 
-    public boolean hasExpansionContains();
+    boolean hasExpansion();
 
-    public List<IValueSetExpansionContainsAdapter> getExpansionContains();
+    boolean hasExpansionContains();
 
-    public <T extends IBaseBackboneElement> T newExpansion();
+    int getExpansionTotal();
 
-    public List<IValueSetConceptSetAdapter> getComposeInclude();
+    List<IValueSetExpansionContainsAdapter> getExpansionContains();
 
-    public List<String> getValueSetIncludes();
+    void appendExpansionContains(List<IValueSetExpansionContainsAdapter> expansionContains);
 
-    public boolean hasCompose();
+    <T extends IBaseBackboneElement> T newExpansion();
 
-    public boolean hasComposeInclude();
+    void addExpansionStringParameter(String name, String value);
+
+    boolean hasExpansionStringParameter(String name, String value);
+
+    List<IValueSetConceptSetAdapter> getComposeInclude();
+
+    List<String> getValueSetIncludes();
+
+    boolean hasCompose();
+
+    boolean hasComposeInclude();
 
     /**
      * A simple compose element of a ValueSet must have a compose without an exclude element. Each element of the
@@ -33,7 +43,7 @@ public interface IValueSetAdapter extends IKnowledgeArtifactAdapter {
      *
      * @return boolean
      */
-    public boolean hasSimpleCompose();
+    boolean hasSimpleCompose();
 
     /**
      * A grouping compose element of a ValueSet must have a compose without an exclude element and each element of the
@@ -41,14 +51,14 @@ public interface IValueSetAdapter extends IKnowledgeArtifactAdapter {
      *
      * @return boolean
      */
-    public boolean hasGroupingCompose();
+    boolean hasGroupingCompose();
 
     /**
      * Performs a naive expansion on the ValueSet by collecting all codes within the compose.  Can only be performed on a ValueSet with a simple compose.
      */
-    public void naiveExpand();
+    void naiveExpand();
 
-    public boolean hasNaiveParameter();
+    boolean hasNaiveParameter();
 
-    public <T extends IBaseBackboneElement> T createNaiveParameter();
+    <T extends IBaseBackboneElement> T createNaiveParameter();
 }

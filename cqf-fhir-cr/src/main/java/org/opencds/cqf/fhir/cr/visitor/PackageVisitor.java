@@ -6,30 +6,40 @@ import static org.opencds.cqf.fhir.utility.Parameters.newParameters;
 import static org.opencds.cqf.fhir.utility.adapter.IAdapterFactory.createAdapterForResource;
 
 import ca.uhn.fhir.repository.IRepository;
+import ca.uhn.fhir.rest.server.exceptions.InvalidRequestException;
 import ca.uhn.fhir.rest.server.exceptions.NotImplementedOperationException;
-import ca.uhn.fhir.rest.server.exceptions.UnprocessableEntityException;
+import ca.uhn.fhir.util.FhirTerser;
+import ca.uhn.fhir.util.OperationOutcomeUtil;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.hl7.fhir.instance.model.api.IBase;
 import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
 import org.hl7.fhir.instance.model.api.IBaseBundle;
+import org.hl7.fhir.instance.model.api.IBaseOperationOutcome;
 import org.hl7.fhir.instance.model.api.IBaseParameters;
 import org.hl7.fhir.instance.model.api.IBaseReference;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.instance.model.api.IDomainResource;
 import org.hl7.fhir.instance.model.api.IPrimitiveType;
 import org.opencds.cqf.fhir.utility.BundleHelper;
+import org.opencds.cqf.fhir.utility.Canonicals;
 import org.opencds.cqf.fhir.utility.Constants;
+import org.opencds.cqf.fhir.utility.Ids;
 import org.opencds.cqf.fhir.utility.PackageHelper;
 import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
+import org.opencds.cqf.fhir.utility.adapter.IDependencyInfo;
 import org.opencds.cqf.fhir.utility.adapter.IEndpointAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IKnowledgeArtifactAdapter;
 import org.opencds.cqf.fhir.utility.adapter.ILibraryAdapter;
@@ -47,10 +57,18 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
     private static final String CONFORMANCE_TYPE = "conformance";
     private static final String KNOWLEDGE_ARTIFACT_TYPE = "knowledge";
     private static final String TERMINOLOGY_TYPE = "terminology";
+    private static final String VALUESET_FHIR_TYPE = "ValueSet";
+    private static final String CRMI_INTENDED_USAGE_CONTEXT_URL =
+            "http://hl7.org/fhir/uv/crmi/StructureDefinition/crmi-intendedUsageContext";
+    private static final int MAX_ID_LENGTH = 64;
+    private static final String CANONICAL_ENCODED_PREFIX = "cv-";
+    private static final Pattern FHIR_ID_PATTERN = Pattern.compile("^[A-Za-z0-9\\-.]+$");
     protected final TerminologyServerClient terminologyServerClient;
     protected final ExpandHelper expandHelper;
 
     protected Map<String, List<?>> resourceTypes = new HashMap<>();
+    private IBaseOperationOutcome messages;
+    private final IAdapterFactory adapterFactory;
 
     public PackageVisitor(IRepository repository) {
         this(repository, (TerminologyServerClient) null, null);
@@ -64,6 +82,7 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
         super(repository);
         this.terminologyServerClient = new TerminologyServerClient(fhirContext(), terminologyServerClientSettings);
         this.expandHelper = new ExpandHelper(this.repository, terminologyServerClient);
+        this.adapterFactory = IAdapterFactory.forFhirContext(repository.fhirContext());
         setupResourceTypes();
     }
 
@@ -74,6 +93,7 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
         super(repository, cache);
         this.terminologyServerClient = new TerminologyServerClient(fhirContext(), terminologyServerClientSettings);
         this.expandHelper = new ExpandHelper(this.repository, terminologyServerClient);
+        this.adapterFactory = IAdapterFactory.forFhirContext(repository.fhirContext());
         setupResourceTypes();
     }
 
@@ -85,6 +105,7 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
             terminologyServerClient = client;
         }
         expandHelper = new ExpandHelper(this.repository, terminologyServerClient);
+        this.adapterFactory = IAdapterFactory.forFhirContext(repository.fhirContext());
         setupResourceTypes();
     }
 
@@ -143,6 +164,7 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
         Optional<Boolean> packageOnly = VisitorHelper.getBooleanParameter("packageOnly", packageParameters);
         Optional<Integer> count = VisitorHelper.getIntegerParameter("count", packageParameters);
         Optional<Integer> offset = VisitorHelper.getIntegerParameter("offset", packageParameters);
+        Optional<String> bundleType = VisitorHelper.getStringParameter("bundleType", packageParameters);
         List<String> include = VisitorHelper.getStringListParameter("include", packageParameters)
                 .orElseGet(() -> new ArrayList<>());
         List<String> capability = VisitorHelper.getStringListParameter("capability", packageParameters)
@@ -172,16 +194,38 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
             throw new NotImplementedOperationException("This repository is not implementing packageOnly at this time");
         }
         if (count.isPresent() && count.get() < 0) {
-            throw new UnprocessableEntityException("'count' must be non-negative");
+            throw new InvalidRequestException("'count' must be non-negative");
         }
+        if (offset.isPresent() && offset.get() < 0) {
+            throw new InvalidRequestException("'offset' must be non-negative");
+        }
+        bundleType
+                .filter(bt -> bt.equals("transaction") || bt.equals("collection"))
+                .ifPresent(bt -> {
+                    if (count.isPresent() || offset.isPresent()) {
+                        throw new InvalidRequestException(
+                                "It is invalid to use paging when requesting a bundle of type '%s'".formatted(bt));
+                    }
+                });
+
         // In the case of a released (active) root Library we can depend on the relatedArtifacts as a
         // comprehensive manifest
         var versionTuple = new ImmutableTriple<>(artifactVersion, checkArtifactVersion, forceArtifactVersion);
         var packagedBundle = BundleHelper.newBundle(fhirVersion);
+
+        // Normalize the id of the root manifest artifact based on its canonical URL and version.
+        // Because this is the manifest artifact, we will surface a warning if we cannot normalize.
+        normalizeIdFromCanonical(adapter, true);
+
         addBundleEntry(packagedBundle, isPut, adapter);
         if (include.size() == 1 && include.stream().anyMatch(includedType -> includedType.equals("artifact"))) {
             findUnsupportedCapability(adapter, capability);
             processCanonicals(adapter, versionTuple);
+
+            // Normalize the id based on canonical before adding the manifest artifact as a separate entry.
+            // Because this is the manifest artifact, we will surface a warning if we cannot normalize.
+            normalizeIdFromCanonical(adapter, true);
+
             var entry = PackageHelper.createEntry(adapter.get(), isPut);
             BundleHelper.addEntry(packagedBundle, entry);
         } else {
@@ -196,12 +240,23 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
                     terminologyServerClient);
             packagedResources.values().stream()
                     .filter(r -> !r.getCanonical().equals(adapter.getCanonical()))
-                    .forEach(r -> addBundleEntry(packagedBundle, isPut, r));
+                    .forEach(r -> {
+                        // Normalize id based on canonical before adding to the package bundle.
+                        // For non-manifest artifacts, we do not surface a warning if normalization fails.
+                        normalizeIdFromCanonical(r, false);
+                        addBundleEntry(packagedBundle, isPut, r);
+                    });
             var included = findUnsupportedInclude(BundleHelper.getEntry(packagedBundle), include, adapter);
             BundleHelper.setEntry(packagedBundle, included);
         }
         handleValueSets(packagedBundle, terminologyEndpoint);
-        setCorrectBundleType(count, offset, packagedBundle);
+        applyManifestUsageContextsToValueSets(adapter, packagedBundle);
+
+        if (messages != null) {
+            messages.setId("messages");
+            getRootSpecificationLibrary(packagedBundle).addCqfMessagesExtension(messages);
+        }
+        setCorrectBundleType(bundleType, count, offset, packagedBundle);
         pageBundleBasedOnCountAndOffset(count, offset, packagedBundle);
         return packagedBundle;
 
@@ -228,7 +283,7 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
                 createAdapterForResource(expansionParams).copy());
 
         var valueSets = BundleHelper.getEntryResources(packagedBundle).stream()
-                .filter(r -> r.fhirType().equals("ValueSet"))
+                .filter(r -> r.fhirType().equals(VALUESET_FHIR_TYPE))
                 .map(v -> (IValueSetAdapter) createAdapterForResource(v))
                 .collect(Collectors.toList());
         var expansionCache = getExpansionCache();
@@ -244,6 +299,7 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
                         .getExpansionForCanonical(v.getCanonical(), expansionParamsHash.orElse(null));
                 if (cachedExpansion != null) {
                     v.setExpansion(cachedExpansion.getExpansion());
+                    addExpansionWarningsToOperationOutcome(v);
                     expandedList.add(v.getUrl());
                     missingInCache.remove(v);
                 }
@@ -260,35 +316,147 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
                             .contains(p.getName()))
                     .map(IParametersParameterComponentAdapter::get)
                     .toList());
-            expandHelper.expandValueSet(valueSet, params, terminologyEndpoint, valueSets, expandedList, new Date());
-            var elapsed = String.valueOf(((new Date()).getTime() - expansionStartTime) / 1000);
-            myLogger.info("Expanded {} in {}s", url, elapsed);
-            if (expansionCache.isPresent()) {
-                expansionCache.get().addToCache(valueSet, expansionParamsHash.orElse(null));
+            try {
+                expandHelper.expandValueSet(valueSet, params, terminologyEndpoint, valueSets, expandedList, new Date());
+                addExpansionWarningsToOperationOutcome(valueSet);
+                var elapsed = String.valueOf(((new Date()).getTime() - expansionStartTime) / 1000);
+                myLogger.info("Expanded {} in {}s", url, elapsed);
+                if (expansionCache.isPresent()) {
+                    expansionCache.get().addToCache(valueSet, expansionParamsHash.orElse(null));
+                }
+            } catch (Exception e) {
+                myLogger.warn("Failed to expand {}. Reporting in outcome manifest", url);
+                addMessageIssue("warning", e.getMessage());
             }
         });
     }
 
-    public static void setCorrectBundleType(Optional<Integer> count, Optional<Integer> offset, IBaseBundle bundle) {
-        // if the bundle is paged then it must be of type = collection and modified to follow bundle.type constraints
-        // if not, set type = transaction
-        // special case of count = 0 -> set type = searchset so we can display bundle.total
-        if (count.isPresent() && count.get() == 0) {
-            BundleHelper.setBundleType(bundle, "searchset");
+    // Helper to surface expansion parameter warnings as OperationOutcome issues
+    private void addExpansionWarningsToOperationOutcome(IValueSetAdapter valueSetAdapter) {
+        if (valueSetAdapter == null || valueSetAdapter.getExpansion() == null) {
+            return;
+        }
+
+        var expansion = valueSetAdapter.getExpansion();
+        try {
+            FhirTerser terser = new FhirTerser(fhirContext());
+            var parameters = terser.getValues(expansion, "parameter");
+            if (parameters == null || parameters.isEmpty()) {
+                return;
+            }
+
+            for (var parameter : parameters) {
+                String name = terser.getSinglePrimitiveValueOrNull(parameter, "name");
+                if (!"warning".equals(name)) {
+                    continue;
+                }
+
+                String warning = terser.getSinglePrimitiveValueOrNull(parameter, "value");
+                if (StringUtils.isBlank(warning)) {
+                    continue;
+                }
+
+                addMessageIssue("warning", warning);
+            }
+        } catch (Exception e) {
+            myLogger.debug(
+                    "Unable to read expansion warning parameters for ValueSet {}: {}",
+                    valueSetAdapter.getUrl(),
+                    e.getMessage());
+        }
+    }
+
+    private void addMessageIssue(String severity, String details) {
+        if (StringUtils.isBlank(details)) {
+            return;
+        }
+
+        if (messages == null) {
+            messages =
+                    OperationOutcomeUtil.createOperationOutcome(severity, details, "processing", fhirContext(), null);
+        } else {
+            OperationOutcomeUtil.addIssue(fhirContext(), messages, severity, details, null, "processing");
+        }
+    }
+
+    protected void applyManifestUsageContextsToValueSets(IKnowledgeArtifactAdapter manifest, IBaseBundle bundle) {
+        // Build list of ValueSet adapters from bundle
+        List<IValueSetAdapter> valueSetResources = BundleHelper.getEntryResources(bundle).stream()
+                .filter(r -> r.fhirType().equals(VALUESET_FHIR_TYPE))
+                .map(adapterFactory::createValueSet)
+                .toList();
+
+        // Filter manifest dependencies to ValueSets only
+        List<IDependencyInfo> dependencies = manifest.getDependencies().stream()
+                .filter(d -> Objects.equals(Canonicals.getResourceType(d.getReference()), VALUESET_FHIR_TYPE))
+                .toList();
+
+        for (IValueSetAdapter valueSetAdapter : valueSetResources) {
+            // Build canonical string for matching (url + optional version)
+            String canonical = valueSetAdapter.getUrl();
+            if (valueSetAdapter.hasVersion()) {
+                canonical += "|" + valueSetAdapter.getVersion();
+            }
+
+            // Find dependencies that reference this ValueSet
+            String finalCanonical = canonical;
+            dependencies.stream()
+                    .filter(dep -> finalCanonical.equals(dep.getReference()))
+                    .forEach(dep ->
+                            // Look for crmi-intendedUsageContext extensions
+                            dep.getExtension().stream()
+                                    .filter(ext -> CRMI_INTENDED_USAGE_CONTEXT_URL.equals(ext.getUrl()))
+                                    .forEach(ext -> {
+                                        var proposedUsageContextAdapter =
+                                                adapterFactory.createUsageContext(ext.getValue());
+
+                                        boolean alreadyExists = false;
+                                        for (var uc : valueSetAdapter.getUseContext()) {
+                                            var uc1 = adapterFactory.createUsageContext(uc);
+                                            if (uc1.equalsDeep(proposedUsageContextAdapter)) {
+                                                alreadyExists = true;
+                                            }
+                                        }
+
+                                        if (!alreadyExists) {
+                                            valueSetAdapter.addUseContext(proposedUsageContextAdapter);
+                                        }
+                                    }));
+        }
+    }
+
+    public static void setCorrectBundleType(
+            Optional<String> requestedBundleType,
+            Optional<Integer> count,
+            Optional<Integer> offset,
+            IBaseBundle bundle) {
+        // if paging is used, the bundle type SHALL be searchset, and the resulting bundles SHALL
+        // conform to the paging guidance here: https://hl7.org/fhir/R4/http.html#paging.
+
+        var pagingRequested = count.isPresent() || offset.isPresent();
+
+        // If paging is requested, set the bundle type to 'searchset'.
+        // Otherwise, use the type requested by the caller ('transaction' or 'collection').
+        // If the caller did not request a type and paging is not enabled, default to 'transaction'.
+        String bundleType = pagingRequested ? "searchset" : requestedBundleType.orElse("transaction");
+        BundleHelper.setBundleType(bundle, bundleType);
+
+        // set total only when paging
+        if (pagingRequested) {
             BundleHelper.setBundleTotal(bundle, BundleHelper.getEntry(bundle).size());
-        } else if ((offset.isPresent() && offset.get() > 0)
-                || (count.isPresent()
-                        && count.get() < BundleHelper.getEntry(bundle).size())) {
-            BundleHelper.setBundleType(bundle, "collection");
-            var removedRequest = BundleHelper.getEntry(bundle).stream()
+        }
+
+        // remove entry.request when paging or when requested bundle type is "collection"
+        boolean removeRequests =
+                pagingRequested || requestedBundleType.map("collection"::equals).orElse(false);
+        if (removeRequests) {
+            var cleanedEntries = BundleHelper.getEntry(bundle).stream()
                     .map(entry -> {
                         BundleHelper.setEntryRequest(bundle.getStructureFhirVersionEnum(), entry, null);
                         return entry;
                     })
                     .collect(Collectors.toList());
-            BundleHelper.setEntry(bundle, removedRequest);
-        } else {
-            BundleHelper.setBundleType(bundle, "transaction");
+            BundleHelper.setEntry(bundle, cleanedEntries);
         }
     }
 
@@ -324,43 +492,83 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
     @SuppressWarnings("unchecked")
     protected <T extends IBaseBackboneElement> List<T> findUnsupportedInclude(
             List<T> entries, List<String> include, IKnowledgeArtifactAdapter adapter) {
-        if (include == null
-                || include.isEmpty()
-                || include.stream().anyMatch(includedType -> includedType.equals("all"))) {
+
+        // CRMI: if include is empty or 'all', return as-is (manifest will already be first)
+        if (include == null || include.isEmpty() || include.stream().anyMatch("all"::equals)) {
             return entries;
         }
-        var adapterFactory = IAdapterFactory.forFhirVersion(fhirVersion());
-        List<T> filteredList = new ArrayList<>();
-        entries.stream().forEach(entry -> {
-            if (isValidResourceType(include, entry) || isExtensionOrProfile(include, adapter, entry)) {
-                filteredList.add(entry);
-            }
-            if (include.stream().anyMatch(type -> type.equals("tests"))
-                    && ((BundleHelper.getEntryResource(fhirVersion(), entry)
-                                            .fhirType()
-                                            .equals("Library")
-                                    && (adapterFactory
-                                            .createCodeableConcept(adapterFactory
-                                                    .createLibrary(BundleHelper.getEntryResource(fhirVersion(), entry))
-                                                    .getType())
-                                            .hasCoding("test-case")))
-                            || (((IDomainResource) BundleHelper.getEntryResource(fhirVersion(), entry))
-                                    .getExtension().stream()
-                                            .anyMatch(ext -> ext.getUrl().contains("isTestCase")
-                                                    && ((IPrimitiveType<Boolean>) ext.getValue()).getValue())))) {
-                filteredList.add(entry);
-            }
 
-            // idk if this is legit just a placeholder for now
-            if (include.stream().anyMatch(type -> type.equals("examples"))
-                    && ((IDomainResource) BundleHelper.getEntryResource(fhirVersion(), entry))
-                            .getExtension().stream()
-                                    .anyMatch(ext -> ext.getUrl().contains("isExample")
-                                            && ((IPrimitiveType<Boolean>) ext.getValue()).getValue())) {
-                filteredList.add(entry);
+        // 1) Identify the outcome-manifest Library (the "root" Library that corresponds to adapter)
+        //    We'll include it unconditionally and keep it first.
+        T manifestEntry = null;
+        List<T> remainder = new ArrayList<>(entries.size());
+        for (T e : entries) {
+            var res = BundleHelper.getEntryResource(fhirVersion(), e);
+            if (manifestEntry == null && isSameCanonical(res, adapter)) {
+                manifestEntry = e;
+            } else {
+                remainder.add(e);
+            }
+        }
+
+        // 2) Filter the remainder using existing rules
+        List<T> filteredRemainder = new ArrayList<>();
+        remainder.forEach(entry -> {
+            if (isValidResourceType(include, entry)
+                    || isExtensionOrProfile(include, adapter, entry)
+                    || isIncludedFhirType(include, entry)) {
+                filteredRemainder.add(entry);
+            }
+            // tests
+            if (include.stream().anyMatch("tests"::equals) && isTestCaseEntry(entry)) {
+                filteredRemainder.add(entry);
+            }
+            // examples (placeholder logic retained)
+            if (include.stream().anyMatch("examples"::equals) && isExampleEntry(entry)) {
+                filteredRemainder.add(entry);
             }
         });
-        return getDistinctFilteredEntries(filteredList);
+
+        // 3) Build result with manifest first, then distinct filtered remainder
+        List<T> result = new ArrayList<>(entries.size());
+        if (manifestEntry != null) {
+            result.add(manifestEntry);
+        }
+        result.addAll(getDistinctFilteredEntries(filteredRemainder));
+        return result;
+    }
+
+    // Helper: compare by canonical URL|version to detect the root manifest library for this package
+    private boolean isSameCanonical(IBaseResource res, IKnowledgeArtifactAdapter rootAdapter) {
+        if (!"Library".equals(res.fhirType())) return false;
+        var af = IAdapterFactory.forFhirVersion(res.getStructureFhirVersionEnum());
+        var lib = af.createLibrary((IDomainResource) res);
+        // equal when both URL and Version match; tolerate null versions if equal by string
+        return lib.getUrl().equals(rootAdapter.getUrl()) && lib.getVersion().equals(rootAdapter.getVersion());
+    }
+
+    // Extract existing test/example checks into helpers (no behavior change)
+    @SuppressWarnings("unchecked")
+    private <T extends IBaseBackboneElement> boolean isTestCaseEntry(T entry) {
+        var af = IAdapterFactory.forFhirVersion(fhirVersion());
+        var r = BundleHelper.getEntryResource(fhirVersion(), entry);
+        return ("Library".equals(r.fhirType())
+                        && af.createCodeableConcept(af.createLibrary(r).getType())
+                                .hasCoding("test-case"))
+                || (((IDomainResource) r)
+                        .getExtension().stream()
+                                .anyMatch(ext -> ext.getUrl().contains("isTestCase")
+                                        && ((IPrimitiveType<Boolean>) ext.getValue()).getValue()));
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T extends IBaseBackboneElement> boolean isExampleEntry(T entry) {
+        // TODO: This is a placeholder for now - validate functionality once example include is implemented in full
+        var r = BundleHelper.getEntryResource(fhirVersion(), entry);
+        return ((IDomainResource) r)
+                .getExtension().stream()
+                        .anyMatch(ext -> ext.getUrl().contains("isExample")
+                                && ((IPrimitiveType<Boolean>) ext.getValue()).getValue());
     }
 
     private <T extends IBaseBackboneElement> boolean isExtensionOrProfile(
@@ -371,6 +579,11 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
                         .equals("StructureDefinition")
                 && adapter.resolvePathString(BundleHelper.getEntryResource(fhirVersion(), entry), "type")
                         .equals("Extension");
+    }
+
+    private <T extends IBaseBackboneElement> boolean isIncludedFhirType(List<String> include, T entry) {
+        return include.contains(
+                BundleHelper.getEntryResource(fhirVersion(), entry).fhirType());
     }
 
     protected <T extends IBaseBackboneElement> boolean isValidResourceType(List<String> include, T entry) {
@@ -462,5 +675,124 @@ public class PackageVisitor extends BaseKnowledgeArtifactVisitor {
                         reference.equals("#" + contained.getIdElement().getValue()))
                 .findFirst();
         return (IBaseParameters) expansionParamResource.orElse(null);
+    }
+
+    /**
+     * Normalize the id of the given knowledge artifact so that it is derived from the canonical URL
+     * and version in a deterministic, FHIR-id-safe way whenever possible.
+     *
+     * <p>The normalization uses the following strategy:
+     * <ol>
+     *   <li>If the artifact has no canonical URL, the id is left unchanged.</li>
+     *   <li>For typical cases, the id is set to {@code &lt;canonicalTail&gt;[-&lt;version&gt;]} when both
+     *       the tail and version consist only of allowed FHIR id characters and the result is at most
+     *       64 characters.</li>
+     *   <li>If the tail-plus-version form is not usable (for example, due to disallowed characters or
+     *       excessive length), the full {@code canonical[|version]} string is Base64-encoded and
+     *       converted to a FHIR-id-safe alphabet with the {@code cv-} prefix.</li>
+     *   <li>If neither a tail-based nor a cv-encoded form can be represented within the FHIR id
+     *       constraints, the existing id is retained. For the manifest artifact, a warning is
+     *       surfaced in the outcome manifest to indicate that the id could not be normalized
+     *       without loss.</li>
+     * </ol>
+     *
+     * @param adapter the knowledge artifact whose id should be normalized; may be {@code null}, in which
+     *                case this method is a no-op
+     * @param warnIfNotNormalized if {@code true}, emits a warning via the outcome manifest when the id
+     *                            cannot be normalized non-lossily
+     */
+    private void normalizeIdFromCanonical(IKnowledgeArtifactAdapter adapter, boolean warnIfNotNormalized) {
+        if (adapter == null) {
+            return;
+        }
+
+        String url = adapter.getUrl();
+        if (StringUtils.isBlank(url)) {
+            // No canonical URL available; leave id as-is.
+            return;
+        }
+
+        String version = adapter.getVersion();
+        String identityString = StringUtils.isBlank(version) ? url : url + "|" + version;
+
+        // 1) Try a human-friendly tail[-version] id when both parts are simple and short enough.
+        String tail = getCanonicalTail(url);
+        if (StringUtils.isNotBlank(tail)
+                && isFhirIdSafe(tail)
+                && (StringUtils.isBlank(version) || isFhirIdSafe(version))) {
+
+            String candidateId = StringUtils.isBlank(version) ? tail : tail + "-" + version;
+            if (isValidFhirId(candidateId)) {
+                adapter.setId(Ids.newId(fhirContext(), candidateId));
+                return;
+            }
+        }
+
+        // 2) Encode the full canonical[|version] string using a FHIR-id-safe Base64 variant.
+        String encoded = encodeToIdSafeBase64(identityString);
+        String encodedId = CANONICAL_ENCODED_PREFIX + encoded;
+        if (encodedId.length() <= MAX_ID_LENGTH) {
+            adapter.setId(Ids.newId(fhirContext(), encodedId));
+            return;
+        }
+
+        // 3) At this point, we cannot represent the canonical|version non-lossily within FHIR id
+        // constraints. Retain the existing id and optionally surface a warning for the manifest.
+        String existingId = adapter.get().getIdElement().getIdPart();
+        String message =
+                "The id for resource %s (%s) could not be normalized from canonical '%s' without loss; retaining existing id '%s'."
+                        .formatted(
+                                adapter.get().fhirType(),
+                                adapter.getUrl(),
+                                identityString,
+                                existingId != null ? existingId : "");
+
+        myLogger.warn(message);
+
+        if (warnIfNotNormalized) {
+            if (messages == null) {
+                messages = OperationOutcomeUtil.createOperationOutcome(
+                        "warning", message, "processing", fhirContext(), null);
+            } else {
+                OperationOutcomeUtil.addIssue(fhirContext(), messages, "warning", message, null, "processing");
+            }
+        }
+    }
+
+    private static String getCanonicalTail(String url) {
+        int idx = url.lastIndexOf('/');
+        return idx >= 0 && idx + 1 < url.length() ? url.substring(idx + 1) : url;
+    }
+
+    private static boolean isFhirIdSafe(String value) {
+        return value != null && FHIR_ID_PATTERN.matcher(value).matches();
+    }
+
+    private static boolean isValidFhirId(String value) {
+        return value != null
+                && value.length() <= MAX_ID_LENGTH
+                && FHIR_ID_PATTERN.matcher(value).matches();
+    }
+
+    /**
+     * Encode the given string into a FHIR-id-safe Base64 representation using only
+     * characters allowed by the FHIR id regex ([A-Za-z0-9-.]).
+     *
+     * <p>This uses standard Base64, then replaces '+' with '-' and '/' with '.', and
+     * strips any trailing '=' padding. This mapping is reversible because the Base64
+     * alphabet does not include '-' or '.'.
+     *
+     * @param value the string to encode
+     * @return an id-safe encoded string
+     */
+    private static String encodeToIdSafeBase64(String value) {
+        if (value == null) {
+            return "";
+        }
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        String base64 = Base64.getEncoder().encodeToString(bytes);
+        // Remove padding and replace disallowed characters with allowed equivalents.
+        base64 = base64.replace("=", "").replace('+', '-').replace('/', '.');
+        return base64;
     }
 }

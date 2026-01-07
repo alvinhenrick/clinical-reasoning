@@ -1,40 +1,38 @@
 package org.opencds.cqf.fhir.cr.questionnaire.generate;
 
-import static org.opencds.cqf.fhir.cr.common.ExtensionBuilders.buildSdcLaunchContextExt;
 import static org.opencds.cqf.fhir.utility.SearchHelper.searchRepositoryByCanonical;
 import static org.opencds.cqf.fhir.utility.VersionUtilities.canonicalTypeForVersion;
 
 import ca.uhn.fhir.repository.IRepository;
 import jakarta.annotation.Nullable;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
-import org.hl7.fhir.instance.model.api.IBaseBackboneElement;
+import org.hl7.fhir.instance.model.api.IBaseDatatype;
 import org.hl7.fhir.instance.model.api.IBaseExtension;
-import org.hl7.fhir.instance.model.api.ICompositeType;
+import org.hl7.fhir.instance.model.api.IBaseHasExtensions;
 import org.hl7.fhir.instance.model.api.IDomainResource;
 import org.hl7.fhir.instance.model.api.IPrimitiveType;
-import org.opencds.cqf.cql.engine.execution.CqlEngine;
-import org.opencds.cqf.fhir.cql.Engines;
 import org.opencds.cqf.fhir.cr.common.ExpressionProcessor;
 import org.opencds.cqf.fhir.cr.common.ExtensionProcessor;
 import org.opencds.cqf.fhir.cr.questionnaire.Helpers;
 import org.opencds.cqf.fhir.utility.Constants;
-import org.opencds.cqf.fhir.utility.Constants.SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE;
 import org.opencds.cqf.fhir.utility.CqfExpression;
+import org.opencds.cqf.fhir.utility.Resources;
 import org.opencds.cqf.fhir.utility.SearchHelper;
 import org.opencds.cqf.fhir.utility.VersionUtilities;
 import org.opencds.cqf.fhir.utility.adapter.IElementDefinitionAdapter;
 import org.opencds.cqf.fhir.utility.adapter.ILibraryAdapter;
+import org.opencds.cqf.fhir.utility.adapter.IQuestionnaireItemComponentAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IStructureDefinitionAdapter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+@SuppressWarnings("UnstableApiUsage")
 public class ItemGenerator {
     protected static final Logger logger = LoggerFactory.getLogger(ItemGenerator.class);
     protected static final String NO_PROFILE_ERROR = "No profile defined for input. Unable to generate item.";
@@ -42,25 +40,38 @@ public class ItemGenerator {
     protected static final String CHILD_LINK_ID_FORMAT = "%s.%s";
 
     protected final IRepository repository;
-    protected final CqlEngine engine;
     protected final ExpressionProcessor expressionProcessor;
     protected final ExtensionProcessor extensionProcessor;
     protected final ElementHasCaseFeature elementHasCaseFeature;
     protected final ItemTypeIsChoice itemTypeIsChoice;
 
     public ItemGenerator(IRepository repository) {
+        this(
+                repository,
+                new ExpressionProcessor(),
+                new ExtensionProcessor(),
+                new ElementHasCaseFeature(),
+                new ItemTypeIsChoice(repository));
+    }
+
+    public ItemGenerator(
+            IRepository repository,
+            ExpressionProcessor expressionProcessor,
+            ExtensionProcessor extensionProcessor,
+            ElementHasCaseFeature elementHasCaseFeature,
+            ItemTypeIsChoice itemTypeIsChoice) {
         this.repository = repository;
-        engine = Engines.forRepository(this.repository);
-        expressionProcessor = new ExpressionProcessor();
-        extensionProcessor = new ExtensionProcessor();
-        elementHasCaseFeature = new ElementHasCaseFeature();
-        itemTypeIsChoice = new ItemTypeIsChoice(repository);
+        this.expressionProcessor = expressionProcessor;
+        this.extensionProcessor = extensionProcessor;
+        this.elementHasCaseFeature = elementHasCaseFeature;
+        this.itemTypeIsChoice = itemTypeIsChoice;
     }
 
     @Nullable
-    public <T extends IBaseExtension<?, ?>> Pair<IBaseBackboneElement, List<T>> generate(GenerateRequest request) {
+    public <T extends IBaseExtension<?, ?>> Pair<IQuestionnaireItemComponentAdapter, List<T>> generate(
+            GenerateRequest request) {
         final String linkId =
-                String.valueOf(request.getItems(request.getQuestionnaire()).size() + 1);
+                String.valueOf(request.getQuestionnaireAdapter().getItem().size() + 1);
         try {
             int childCount = 0;
             var caseFeature = getFeatureExpression(request);
@@ -73,10 +84,10 @@ public class ItemGenerator {
             }
             var questionnaireItem = createQuestionnaireItem(request, linkId);
             if (!childItems.isEmpty()) {
-                request.getModelResolver().setValue(questionnaireItem, "item", childItems);
+                questionnaireItem.addItems(childItems);
             }
             if (!valueExtensions.isEmpty()) {
-                request.getModelResolver().setValue(questionnaireItem, "extension", valueExtensions);
+                valueExtensions.forEach(questionnaireItem::addExtension);
             }
 
             // If we have a caseFeature we need to include launchContext extensions and Item Population Context
@@ -86,27 +97,19 @@ public class ItemGenerator {
                 itemContextExt.setUrl(Constants.SDC_QUESTIONNAIRE_ITEM_POPULATION_CONTEXT);
                 itemContextExt.setValue(caseFeature.toExpressionType(request.getFhirVersion()));
                 // Assume Patient for now - this should probably be the context of the Library if we can determine that
-                launchContextExts.add(buildSdcLaunchContextExt(request.getFhirVersion(), "patient"));
+                launchContextExts.add(buildSdcLaunchContextExt(request, "patient", "Patient"));
                 var featureLibrary = request.getAdapterFactory()
                         .createLibrary(SearchHelper.searchRepositoryByCanonical(
                                 repository,
                                 VersionUtilities.canonicalTypeForVersion(
                                         request.getFhirVersion(), caseFeature.getLibraryUrl())));
-
-                // Add any other in parameters that match launch context codes
-                var inParameters = featureLibrary.getParameter().stream()
-                        .filter(p -> {
-                            var name = request.resolvePathString(p, "name").toUpperCase();
-                            return (name.equals("PRACTITIONER"))
-                                    || request.resolvePathString(p, "use").equals("in")
-                                            && Arrays.stream(SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE.values())
-                                                    .map(Object::toString)
-                                                    .toList()
-                                                    .contains(name);
-                        })
-                        .map(p -> request.resolvePathString(p, "name").toLowerCase())
-                        .toList();
-                inParameters.forEach(p -> launchContextExts.add(buildSdcLaunchContextExt(request.getFhirVersion(), p)));
+                // Add any other in parameters that with a type of Resource
+                featureLibrary.getParameter().stream()
+                        .filter(p -> request.resolvePathString(p, "use").equals("in"))
+                        .filter(p -> request.getFHIRTypes().contains(request.resolvePathString(p, "type")))
+                        .map(p -> new ImmutablePair<String, String>(
+                                request.resolvePathString(p, "name"), request.resolvePathString(p, "type")))
+                        .forEach(p -> launchContextExts.add(buildSdcLaunchContextExt(request, p.left, p.right)));
             }
             return new ImmutablePair<>(questionnaireItem, launchContextExts);
         } catch (Exception ex) {
@@ -114,6 +117,54 @@ public class ItemGenerator {
             logger.error(message);
             return new ImmutablePair<>(createErrorItem(request, linkId, message), new ArrayList<>());
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    protected <T extends IBaseExtension<?, ?>> T buildSdcLaunchContextExt(
+            GenerateRequest request, String code, String type) {
+        var system = "http://hl7.org/fhir/uv/sdc/CodeSystem/launchContext";
+        var display = "";
+        switch (code.toLowerCase()) {
+            case "patient":
+                display = "Patient";
+                break;
+            case "encounter":
+                display = "Encounter";
+                break;
+            case "location":
+                display = "Location";
+                break;
+            case "practitioner", "user":
+                code = "user";
+                display = "User";
+                break;
+            case "study":
+                display = "ResearchStudy";
+                break;
+            case "clinical":
+                display = "Clinical";
+                break;
+
+            default:
+                display = code;
+                system = "http://example.org/fhir/uv/sdc/CodeSystem/additionalLaunchContext";
+                break;
+        }
+        var fhirVersion = request.getFhirVersion();
+        var ext = ((IBaseHasExtensions) Resources.newBaseForVersion("Extension", fhirVersion)).addExtension();
+        ext.setUrl(Constants.SDC_QUESTIONNAIRE_LAUNCH_CONTEXT);
+        var nameExt = ((IBaseHasExtensions) ext).addExtension();
+        nameExt.setUrl("name");
+        var nameCoding = request.getAdapterFactory().createCoding(Resources.newBaseForVersion("Coding", fhirVersion));
+        nameCoding.setDisplay(display);
+        nameCoding.setCode(code);
+        nameCoding.setSystem(system);
+        nameExt.setValue((IBaseDatatype) nameCoding.get());
+        var typeExt = ((IBaseHasExtensions) ext).addExtension();
+        typeExt.setUrl("type");
+        typeExt.setValue(
+                ((IPrimitiveType<String>) Resources.newBaseForVersion("CodeType", fhirVersion)).setValue(type));
+        return (T) ext;
     }
 
     protected CqfExpression getFeatureExpression(GenerateRequest request) {
@@ -125,13 +176,13 @@ public class ItemGenerator {
         return expression;
     }
 
-    protected <E extends IBaseExtension<?, ?>> Pair<List<IBaseBackboneElement>, List<E>> processElements(
+    protected <E extends IBaseExtension<?, ?>> Pair<List<IQuestionnaireItemComponentAdapter>, List<E>> processElements(
             GenerateRequest request,
             List<IElementDefinitionAdapter> elements,
             int childCount,
             String itemLinkId,
             CqfExpression caseFeature) {
-        List<IBaseBackboneElement> items = new ArrayList<>();
+        List<IQuestionnaireItemComponentAdapter> items = new ArrayList<>();
         List<E> valueExtensions = new ArrayList<>();
         for (var element : elements) {
             if (element.hasExtension(Constants.SDC_QUESTIONNAIRE_DEFINITION_EXTRACT_VALUE)) {
@@ -140,7 +191,7 @@ public class ItemGenerator {
                 // elements with default values do not need to be generated
                 // they will be pulled from the profile during extraction
 
-                IBaseBackboneElement item;
+                IQuestionnaireItemComponentAdapter item;
                 childCount++;
                 var childLinkId = CHILD_LINK_ID_FORMAT.formatted(itemLinkId, childCount);
                 item = processElement(request, caseFeature, element, childLinkId);
@@ -154,7 +205,7 @@ public class ItemGenerator {
         return new ImmutablePair<>(items, valueExtensions);
     }
 
-    protected IBaseBackboneElement processProfile(
+    protected IQuestionnaireItemComponentAdapter processProfile(
             GenerateRequest request, IStructureDefinitionAdapter profileAdapter, String childLinkId) {
         // generate a new group item from the profile
         // if the generated group item has only 1 child return it
@@ -172,7 +223,7 @@ public class ItemGenerator {
         }
     }
 
-    protected IBaseBackboneElement processElement(
+    protected IQuestionnaireItemComponentAdapter processElement(
             GenerateRequest request, CqfExpression caseFeature, IElementDefinitionAdapter element, String childLinkId) {
         // if the element type has a profile we will generate a new group item
         // from that profile if we can find it in the repository
@@ -191,15 +242,15 @@ public class ItemGenerator {
         var valueExtensions = results.getRight();
         var item = createItemForElement(request, element, childLinkId, caseFeature, !childItems.isEmpty());
         if (!childItems.isEmpty()) {
-            request.getModelResolver().setValue(item, "item", childItems);
+            item.addItems(childItems);
         }
-        if (!valueExtensions.isEmpty()) {
-            request.getModelResolver().setValue(item, "extension", valueExtensions);
+        if (valueExtensions != null && !valueExtensions.isEmpty()) {
+            valueExtensions.forEach(item::addExtension);
         }
         return item;
     }
 
-    protected IBaseBackboneElement createItemForElement(
+    protected IQuestionnaireItemComponentAdapter createItemForElement(
             GenerateRequest request,
             IElementDefinitionAdapter element,
             String childLinkId,
@@ -217,10 +268,10 @@ public class ItemGenerator {
             final var repeats = element.hasMax() && !element.getMax().equals("1");
             final var item = initializeQuestionnaireItem(
                     request, itemType, definition, childLinkId, getElementText(element), required, repeats);
-            if (Helpers.isGroupItemType(itemType)) {
+            if (item.isGroupItem()) {
                 return item;
             }
-            if (Helpers.isChoiceItemType(itemType)) {
+            if (item.isChoiceItem()) {
                 itemTypeIsChoice.addProperties(element, item);
             }
             if (caseFeature != null) {
@@ -301,13 +352,9 @@ public class ItemGenerator {
         }
     }
 
-    protected <E extends ICompositeType> boolean isRequiredPath(GenerateRequest request, E element) {
-        var min = request.resolvePath(element, "min", IPrimitiveType.class);
-        return (min != null && (Integer) min.getValue() != 0);
-    }
-
-    protected IBaseBackboneElement createErrorItem(GenerateRequest request, String linkId, String errorMessage) {
-        return createQuestionnaireItemComponent(request, errorMessage, linkId, null, true, false);
+    protected IQuestionnaireItemComponentAdapter createErrorItem(
+            GenerateRequest request, String linkId, String errorMessage) {
+        return initializeQuestionnaireItem(request, "display", errorMessage, linkId, errorMessage, false, false);
     }
 
     protected String getElementType(GenerateRequest request, IElementDefinitionAdapter element) {
@@ -328,12 +375,12 @@ public class ItemGenerator {
         return type;
     }
 
-    public IBaseBackboneElement createQuestionnaireItem(GenerateRequest request, String linkId) {
+    public IQuestionnaireItemComponentAdapter createQuestionnaireItem(GenerateRequest request, String linkId) {
         var text = request.getProfileAdapter().hasTitle()
                 ? request.getProfileAdapter().getTitle()
                 : request.getProfileAdapter().getName();
-        var item = createQuestionnaireItemComponent(
-                request, text, linkId, request.getProfileAdapter().getUrl(), false, isRepeats(request));
+        var item = initializeQuestionnaireItem(
+                request, "group", request.getProfileAdapter().getUrl(), linkId, text, false, isRepeats(request));
         var definitionExtract = item.addExtension();
         definitionExtract.setUrl(Constants.SDC_QUESTIONNAIRE_DEFINITION_EXTRACT);
         definitionExtract.setValue(canonicalTypeForVersion(
@@ -373,51 +420,22 @@ public class ItemGenerator {
         return false;
     }
 
-    protected IBaseBackboneElement createQuestionnaireItemComponent(
+    protected IQuestionnaireItemComponentAdapter initializeQuestionnaireItem(
             GenerateRequest request,
-            String text,
-            String linkId,
-            String definition,
-            Boolean isDisplay,
-            Boolean isRepeats) {
-        Object itemType =
-                switch (request.getFhirVersion()) {
-                    case R4 -> Boolean.TRUE.equals(isDisplay)
-                            ? org.hl7.fhir.r4.model.Questionnaire.QuestionnaireItemType.DISPLAY
-                            : org.hl7.fhir.r4.model.Questionnaire.QuestionnaireItemType.GROUP;
-                    case R5 -> Boolean.TRUE.equals(isDisplay)
-                            ? org.hl7.fhir.r5.model.Questionnaire.QuestionnaireItemType.DISPLAY
-                            : org.hl7.fhir.r5.model.Questionnaire.QuestionnaireItemType.GROUP;
-                    default -> null;
-                };
-        return initializeQuestionnaireItem(request, itemType, definition, linkId, text, false, isRepeats);
-    }
-
-    protected IBaseBackboneElement initializeQuestionnaireItem(
-            GenerateRequest request,
-            Object itemType,
+            String itemType,
             String definition,
             String linkId,
             String text,
             boolean required,
             boolean repeats) {
-        return switch (request.getFhirVersion()) {
-            case R4 -> new org.hl7.fhir.r4.model.Questionnaire.QuestionnaireItemComponent()
-                    .setType((org.hl7.fhir.r4.model.Questionnaire.QuestionnaireItemType) itemType)
-                    .setDefinition(definition)
-                    .setLinkId(linkId)
-                    .setText(text)
-                    .setRequired(required)
-                    .setRepeats(repeats);
-            case R5 -> new org.hl7.fhir.r5.model.Questionnaire.QuestionnaireItemComponent()
-                    .setType((org.hl7.fhir.r5.model.Questionnaire.QuestionnaireItemType) itemType)
-                    .setDefinition(definition)
-                    .setLinkId(linkId)
-                    .setText(text)
-                    .setRequired(required)
-                    .setRepeats(repeats);
-            default -> null;
-        };
+        return request.getAdapterFactory()
+                .createQuestionnaireItem()
+                .setType(itemType)
+                .setDefinition(definition)
+                .setLinkId(linkId)
+                .setText(text)
+                .setRequired(required)
+                .setRepeats(repeats);
     }
 
     protected String getElementText(IElementDefinitionAdapter element) {

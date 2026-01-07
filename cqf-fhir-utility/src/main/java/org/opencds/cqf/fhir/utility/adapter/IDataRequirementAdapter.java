@@ -1,9 +1,10 @@
 package org.opencds.cqf.fhir.utility.adapter;
 
 import java.util.List;
-import org.hl7.fhir.instance.model.api.ICompositeType;
+import org.hl7.fhir.instance.model.api.IBase;
+import org.hl7.fhir.instance.model.api.IPrimitiveType;
 
-public interface IDataRequirementAdapter extends IAdapter<ICompositeType> {
+public interface IDataRequirementAdapter extends IAdapter<IBase> {
 
     boolean hasId();
 
@@ -12,6 +13,10 @@ public interface IDataRequirementAdapter extends IAdapter<ICompositeType> {
     boolean hasType();
 
     String getType();
+
+    boolean hasProfile();
+
+    List<IPrimitiveType<String>> getProfile();
 
     boolean hasCodeFilter();
 

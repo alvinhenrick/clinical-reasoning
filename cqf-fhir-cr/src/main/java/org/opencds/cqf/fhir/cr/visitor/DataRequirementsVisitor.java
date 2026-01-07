@@ -1,5 +1,8 @@
 package org.opencds.cqf.fhir.cr.visitor;
 
+import static kotlinx.io.CoreKt.buffered;
+import static kotlinx.io.JvmCoreKt.asSource;
+
 import ca.uhn.fhir.context.FhirVersionEnum;
 import ca.uhn.fhir.repository.IRepository;
 import ca.uhn.fhir.rest.server.exceptions.UnprocessableEntityException;
@@ -34,6 +37,7 @@ import org.opencds.cqf.fhir.cql.EvaluationSettings;
 import org.opencds.cqf.fhir.cql.cql2elm.content.RepositoryFhirLibrarySourceProvider;
 import org.opencds.cqf.fhir.cql.cql2elm.util.LibraryVersionSelector;
 import org.opencds.cqf.fhir.utility.Libraries;
+import org.opencds.cqf.fhir.utility.adapter.IAdapter;
 import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
 import org.opencds.cqf.fhir.utility.adapter.IKnowledgeArtifactAdapter;
 import org.opencds.cqf.fhir.utility.adapter.ILibraryAdapter;
@@ -86,7 +90,10 @@ public class DataRequirementsVisitor extends BaseKnowledgeArtifactVisitor {
                         true,
                         true);
                 var convertedLibrary = convertAndCreateAdapter(r5Library);
-                convertedLibrary.getDataRequirement().forEach(dataReq -> library.addDataRequirement(dataReq.get()));
+                convertedLibrary.getDataRequirement().stream()
+                        .map(IAdapter::get)
+                        .map(ICompositeType.class::cast)
+                        .forEach(library::addDataRequirement);
                 convertedLibrary.getRelatedArtifact().forEach(library::addRelatedArtifact);
             });
         }
@@ -141,7 +148,7 @@ public class DataRequirementsVisitor extends BaseKnowledgeArtifactVisitor {
     protected CqlTranslator getTranslator(InputStream cqlStream, LibraryManager libraryManager) {
         CqlTranslator translator;
         try {
-            translator = CqlTranslator.fromStream(cqlStream, libraryManager);
+            translator = CqlTranslator.fromSource(buffered(asSource(cqlStream)), libraryManager);
         } catch (IOException e) {
             throw new IllegalArgumentException("Errors occurred translating library: %s".formatted(e.getMessage()));
         }

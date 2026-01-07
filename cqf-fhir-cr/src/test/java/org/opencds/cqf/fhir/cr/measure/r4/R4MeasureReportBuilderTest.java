@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-import ca.uhn.fhir.rest.server.exceptions.InvalidRequestException;
+import ca.uhn.fhir.rest.server.exceptions.InternalErrorException;
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 import java.time.LocalDate;
@@ -26,9 +26,11 @@ import org.hl7.fhir.r4.model.Measure.MeasureSupplementalDataComponent;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Resource;
+import org.hl7.fhir.r4.model.ResourceType;
 import org.junit.jupiter.api.Test;
 import org.opencds.cqf.cql.engine.runtime.Date;
 import org.opencds.cqf.cql.engine.runtime.Interval;
+import org.opencds.cqf.fhir.cr.measure.MeasureStratifierType;
 import org.opencds.cqf.fhir.cr.measure.common.CodeDef;
 import org.opencds.cqf.fhir.cr.measure.common.ConceptDef;
 import org.opencds.cqf.fhir.cr.measure.common.GroupDef;
@@ -165,7 +167,7 @@ class R4MeasureReportBuilderTest {
         try {
             r4MeasureReportBuilder.build(measure, measureDef, MeasureReportType.INDIVIDUAL, null, subjectIds);
             fail("expected failure");
-        } catch (InvalidRequestException exception) {
+        } catch (InternalErrorException exception) {
             assertEquals(
                     "The Measure has a different number of groups defined than the MeasureDef for Measure: http://something.com/measure1",
                     exception.getMessage());
@@ -182,7 +184,7 @@ class R4MeasureReportBuilderTest {
         try {
             r4MeasureReportBuilder.build(measure, measureDef, MeasureReportType.INDIVIDUAL, null, subjectIds);
             fail("expected failure");
-        } catch (InvalidRequestException exception) {
+        } catch (InternalErrorException exception) {
             assertEquals(
                     "The Measure has a different number of groups defined than the MeasureDef for Measure: http://something.com/measure1",
                     exception.getMessage());
@@ -214,7 +216,7 @@ class R4MeasureReportBuilderTest {
             boolean isKeyResource,
             Collection<Object> evaluatedResources) {
         return new MeasureDef(
-                id,
+                new IdType(ResourceType.Measure.name(), id),
                 url,
                 null,
                 IntStream.range(0, numGroups)
@@ -255,14 +257,18 @@ class R4MeasureReportBuilderTest {
     }
 
     private static PopulationDef buildPopulationRef(Collection<Object> resources) {
+        CodeDef booleanBasis = new CodeDef(MeasureConstants.POPULATION_BASIS_URL, "boolean");
         final PopulationDef populationDef = new PopulationDef(
                 null,
                 new ConceptDef(List.of(new CodeDef("system", MeasurePopulationType.DATEOFCOMPLIANCE.toCode())), null),
                 MeasurePopulationType.DATEOFCOMPLIANCE,
+                null,
+                booleanBasis,
+                null,
                 null);
 
         if (resources != null) {
-            resources.forEach(populationDef::addResource);
+            resources.forEach(res -> populationDef.addResource("subj", res));
         }
 
         return populationDef;
@@ -282,7 +288,7 @@ class R4MeasureReportBuilderTest {
 
     @Nonnull
     private static StratifierDef buildStratifierDef() {
-        return new StratifierDef(null, null, null);
+        return new StratifierDef("stratifier-1", null, null, MeasureStratifierType.VALUE);
     }
 
     private static Measure buildMeasure(String id, String url, int numGroups, int numSdes) {

@@ -98,7 +98,7 @@ class EnginesTest {
 
         var engine = getEngine(settings);
 
-        assertTrue(engine.getState().getDebugMap().getIsLoggingEnabled());
+        assertTrue(engine.getState().getDebugMap().isLoggingEnabled());
 
         assertDataProviders(engine);
     }
@@ -124,7 +124,7 @@ class EnginesTest {
 
         var engine = getEngine(settings);
 
-        assertTrue(engine.getState().getDebugMap().getIsLoggingEnabled());
+        assertTrue(engine.getState().getDebugMap().isLoggingEnabled());
 
         assertDataProviders(engine);
     }
@@ -154,7 +154,7 @@ class EnginesTest {
         var settings = EvaluationSettings.getDefault();
         settings.getCqlOptions().getCqlEngineOptions().setDebugLoggingEnabled(true);
         var engine = getEngine(settings);
-        assertTrue(engine.getState().getDebugMap().getIsLoggingEnabled());
+        assertTrue(engine.getState().getDebugMap().isLoggingEnabled());
 
         assertDataProviders(engine);
     }
@@ -232,6 +232,9 @@ class EnginesTest {
         var namespaceInfo2 = new NamespaceInfo("1", "b");
         when(npmProcessor.getNamespaces()).thenReturn(List.of(namespaceInfo1, namespaceInfo2));
         when(npmProcessor.getIgContext()).thenReturn(mock(IGContext.class));
+        // Mockito does not respect @Nonnull annotation, so we have to mock this to avoid NPEs
+        when(npmProcessor.getIgContext().getFhirVersion())
+                .thenReturn(repository.fhirContext().getVersion().getVersion().toString());
         when(npmProcessor.getPackageManager()).thenReturn(mock(NpmPackageManager.class));
         var settings = EvaluationSettings.getDefault().withNpmProcessor(npmProcessor);
 
@@ -251,6 +254,9 @@ class EnginesTest {
         var namespaceInfo2 = new NamespaceInfo("2", "a");
         when(npmProcessor.getNamespaces()).thenReturn(List.of(namespaceInfo1, namespaceInfo2));
         when(npmProcessor.getIgContext()).thenReturn(mock(IGContext.class));
+        // Mockito does not respect @Nonnull annotation, so we have to mock this to avoid NPEs
+        when(npmProcessor.getIgContext().getFhirVersion())
+                .thenReturn(repository.fhirContext().getVersion().getVersion().toString());
         when(npmProcessor.getPackageManager()).thenReturn(mock(NpmPackageManager.class));
         var settings = EvaluationSettings.getDefault().withNpmProcessor(npmProcessor);
 

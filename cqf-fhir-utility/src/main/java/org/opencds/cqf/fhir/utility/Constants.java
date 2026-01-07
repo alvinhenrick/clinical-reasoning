@@ -56,6 +56,10 @@ public class Constants {
     public static final String CPG_QUESTIONNAIRE_GENERATE =
             "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-questionnaire-generate";
     public static final String CPG_RATIONALE = "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-rationale";
+    public static final String CPG_RELATED_ARTIFACT =
+            "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-relatedArtifact";
+    public static final String ARTIFACT_RELATED_ARTIFACT =
+            "http://hl7.org/fhir/StructureDefinition/artifact-relatedArtifact";
     public static final String CPG_SERVICE_REQUEST =
             "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest";
     public static final String CPG_STRATEGY = "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-strategy";
@@ -68,6 +72,27 @@ public class Constants {
     public static final String CPG_CUSTOM_ACTIVITY_KIND =
             "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-custom-activity-kind";
     public static final String CPG_ACTIVITY_KIND = "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-activity-kind";
+    public static final String CPG_ACTIVITY_TYPE_CS = "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs";
+
+    public enum CPG_ACTIVITY_TYPE_CODE {
+        SEND_MESSAGE("send-message"),
+        COLLECT_INFORMATION("collect-information");
+
+        public final String code;
+
+        CPG_ACTIVITY_TYPE_CODE(String code) {
+            this.code = code;
+        }
+    }
+
+    public static final String CPG_SUMMARY_FOR = "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-summaryFor";
+    public static final String CPG_GENERATED_FOR = "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-generatedFor";
+
+    public static final String CPG_CASE_PLAN_SUMMARY =
+            "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-caseplansummary";
+    public static final String CPG_RELATED_SUMMARY_DEFINITION =
+            "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-relatedsummarydefinition";
+
     public static final String CQF_RESOURCETYPE = "http://hl7.org/fhir/StructureDefinition/cqf-resourceType";
 
     // DSTU3 CQF Extensions
@@ -95,6 +120,8 @@ public class Constants {
     public static final String CQF_FHIR_QUERY_PATTERN = "http://hl7.org/fhir/StructureDefinition/cqf-fhirQueryPattern";
     public static final String CQF_DIRECT_REFERENCE_EXTENSION =
             "http://hl7.org/fhir/StructureDefinition/cqf-directReferenceCode";
+    public static final String CQF_MESSAGES = "http://hl7.org/fhir/StructureDefinition/cqf-messages";
+    public static final String CQF_LOGIC_DEFINITION = "http://hl7.org/fhir/StructureDefinition/cqf-logicDefinition";
 
     public static final String CQFM_EFFECTIVE_DATA_REQUIREMENTS =
             "http://hl7.org/fhir/us/cqfmeasures/StructureDefinition/cqfm-effectiveDataRequirements";
@@ -114,7 +141,6 @@ public class Constants {
 
     public static final String DTR_QUESTIONNAIRE_RESPONSE_QUESTIONNAIRE =
             "http://hl7.org/fhir/us/davinci-dtr/StructureDefinition/dtr-questionnaireresponse-questionnaire";
-    public static final String EXT_CRMI_MESSAGES = "http://hl7.org/fhir/uv/crmi/StructureDefinition/crmi-messages";
     public static final String SDC_QUESTIONNAIRE_HIDDEN =
             "http://hl7.org/fhir/StructureDefinition/questionnaire-hidden";
     public static final String SDC_QUESTIONNAIRE_ITEM_EXTRACTION_CONTEXT =
@@ -149,6 +175,8 @@ public class Constants {
     public static final String SDC_CATEGORY_SURVEY = "survey";
     public static final String SDC_QUESTIONNAIRE_LAUNCH_CONTEXT =
             "http://hl7.org/fhir/uv/sdc/StructureDefinition/sdc-questionnaire-launchContext";
+    public static final String SDC_QUESTIONNAIRE_ADAPTIVE =
+            "http://hl7.org/fhir/uv/sdc/StructureDefinition/sdc-questionnaire-questionnaireAdaptive";
 
     public enum SDC_QUESTIONNAIRE_LAUNCH_CONTEXT_CODE {
         PATIENT,
@@ -205,4 +233,8 @@ public class Constants {
     public static final String RELATEDARTIFACT_TYPE_DEPENDSON = "depends-on";
     public static final String RESOURCETYPE_VALUESET = "ValueSet";
     public static final String RESOURCETYPE_CODESYSTEM = "CodeSystem";
+
+    public static final String EMPTY = "empty";
+
+    public static final String PREVIOUS_VALUE = "previousValue";
 }

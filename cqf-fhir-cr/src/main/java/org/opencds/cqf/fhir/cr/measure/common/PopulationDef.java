@@ -1,8 +1,11 @@
 package org.opencds.cqf.fhir.cr.measure.common;
 
+import jakarta.annotation.Nullable;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public class PopulationDef {
@@ -11,17 +14,44 @@ public class PopulationDef {
     private final String expression;
     private final ConceptDef code;
     private final MeasurePopulationType measurePopulationType;
+    private final CodeDef populationBasis;
+
+    @Nullable
+    private final String criteriaReference;
+
+    @Nullable
+    private final ContinuousVariableObservationAggregateMethod aggregateMethod;
+
+    @Nullable
+    private Double aggregationResult;
 
     protected Set<Object> evaluatedResources;
-    protected Set<Object> resources;
-    protected Set<String> subjects;
     protected Map<String, Set<Object>> subjectResources = new HashMap<>();
 
-    public PopulationDef(String id, ConceptDef code, MeasurePopulationType measurePopulationType, String expression) {
+    public PopulationDef(
+            String id,
+            ConceptDef code,
+            MeasurePopulationType measurePopulationType,
+            String expression,
+            CodeDef populationBasis) {
+        this(id, code, measurePopulationType, expression, populationBasis, null, null);
+    }
+
+    public PopulationDef(
+            String id,
+            ConceptDef code,
+            MeasurePopulationType measurePopulationType,
+            String expression,
+            CodeDef populationBasis,
+            @Nullable String criteriaReference,
+            @Nullable ContinuousVariableObservationAggregateMethod aggregateMethod) {
         this.id = id;
         this.code = code;
         this.measurePopulationType = measurePopulationType;
         this.expression = expression;
+        this.populationBasis = populationBasis;
+        this.criteriaReference = criteriaReference;
+        this.aggregateMethod = aggregateMethod;
     }
 
     public MeasurePopulationType type() {
@@ -36,44 +66,91 @@ public class PopulationDef {
         return this.code;
     }
 
-    public void addEvaluatedResource(Object resource) {
-        this.getEvaluatedResources().add(resource);
+    /**
+     * Get the population basis code for this population.
+     * The population basis determines how population members are counted.
+     *
+     * @return the population basis CodeDef
+     */
+    public CodeDef getPopulationBasis() {
+        return this.populationBasis;
+    }
+
+    /**
+     * Check if this population uses boolean basis (patient-based counting).
+     * When true, counts unique subjects. When false, counts all resources.
+     *
+     * @return true if population basis is "boolean", false otherwise
+     */
+    public boolean isBooleanBasis() {
+        return this.populationBasis.code().equals("boolean");
     }
 
     public Set<Object> getEvaluatedResources() {
         if (this.evaluatedResources == null) {
-            this.evaluatedResources = new HashSet<>();
+            this.evaluatedResources = new HashSetForFhirResourcesAndCqlTypes<>();
         }
 
         return this.evaluatedResources;
     }
 
-    public void addSubject(String subject) {
-        this.getSubjects().add(subject);
-    }
-
-    public void removeSubject(String subject) {
-        this.getSubjects().remove(subject);
-    }
-
     public Set<String> getSubjects() {
-        if (this.subjects == null) {
-            this.subjects = new HashSet<>();
-        }
-
-        return this.subjects;
+        return this.getSubjectResources().keySet();
     }
 
-    public void addResource(Object resource) {
-        this.getResources().add(resource);
+    public void retainAllResources(String subjectId, PopulationDef otherPopulationDef) {
+        getResourcesForSubject(subjectId).retainAll(otherPopulationDef.getResourcesForSubject(subjectId));
     }
 
-    public Set<Object> getResources() {
-        if (this.resources == null) {
-            this.resources = new HashSet<>();
+    public void retainAllSubjects(PopulationDef otherPopulationDef) {
+        this.getSubjects().retainAll(otherPopulationDef.getSubjects());
+    }
+
+    public void removeAllResources(String subjectId, PopulationDef otherPopulationDef) {
+        getResourcesForSubject(subjectId).removeAll(otherPopulationDef.getResourcesForSubject(subjectId));
+    }
+
+    public void removeAllSubjects(PopulationDef otherPopulationDef) {
+        this.getSubjects().removeAll(otherPopulationDef.getSubjects());
+    }
+
+    /**
+     * Used if we want to count all resources that may be duplicated across subjects, for example,
+     * for Date values that will be identical across subjects, but we want to count the duplicates.
+     * <p/>
+     * example:
+     * population:
+     * <Subject1,<Organization/1>>
+     * <Subject2,<Organization/1>>
+     * Population Count for Population Basis Organization = 2, even though the resulting resource object is the same
+     * <Subject1,<1/1/2024>>
+     * <Subject2,<1/1/2024>>
+     * Population Count for Population Basis date = 2, even though the resulting resource object is the same
+     *
+     */
+    public List<Object> getAllSubjectResources() {
+        return subjectResources.values().stream()
+                .flatMap(Collection::stream)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    // Extracted from R4MeasureReportBuilder.countObservations() by Claude Sonnet 4.5
+    public int countObservations() {
+        if (this.getAllSubjectResources() == null) {
+            return 0;
         }
 
-        return this.resources;
+        return this.getAllSubjectResources().stream()
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .mapToInt(Map::size)
+                .sum();
+    }
+
+    @Nullable
+    public String getCriteriaReference() {
+        return this.criteriaReference;
     }
 
     public String expression() {
@@ -85,48 +162,68 @@ public class PopulationDef {
         return subjectResources;
     }
 
+    public Set<Object> getResourcesForSubject(String subjectId) {
+        return subjectResources.getOrDefault(subjectId, new HashSetForFhirResourcesAndCqlTypes<>());
+    }
+
     // Add an element to Set<Object> under a key (Creates a new set if key is missing)
     public void addResource(String key, Object value) {
-        subjectResources.computeIfAbsent(key, k -> new HashSet<>()).add(value);
+        subjectResources
+                .computeIfAbsent(key, k -> new HashSetForFhirResourcesAndCqlTypes<>())
+                .add(value);
     }
 
-    public void removeOverlaps(Map<String, Set<Object>> overlap) {
-        var iterator = subjectResources.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<String, Set<Object>> entry = iterator.next();
-            String key = entry.getKey();
-            Set<Object> valuesInA = entry.getValue();
+    @Nullable
+    public ContinuousVariableObservationAggregateMethod getAggregateMethod() {
+        return this.aggregateMethod;
+    }
 
-            if (overlap.containsKey(key)) {
-                valuesInA.removeAll(overlap.get(key)); // Remove overlapping elements
-            }
+    @Nullable
+    public Double getAggregationResult() {
+        return aggregationResult;
+    }
 
-            if (valuesInA.isEmpty()) {
-                iterator.remove(); // Safely remove key if Set is empty
-            }
+    public void setAggregationResult(@Nullable Double aggregationResult) {
+        this.aggregationResult = aggregationResult;
+    }
+
+    /**
+     * Added by Claude Sonnet 4.5 on 2025-12-02
+     * Updated by Claude Sonnet 4.5 on 2025-12-08 to use own populationBasis instead of GroupDef parameter.
+     * Get the count for this population based on its type and population basis.
+     * This is the single source of truth for population counts.
+     *
+     * @return the count for this population
+     */
+    public int getCount() {
+        // For MEASUREOBSERVATION populations, count the observations
+        if (this.measurePopulationType == MeasurePopulationType.MEASUREOBSERVATION) {
+            return countObservations();
+        }
+
+        // For other population types, use population basis to determine count
+        if (isBooleanBasis()) {
+            // Boolean basis: count unique subjects
+            return getSubjects().size();
+        } else {
+            // Non-boolean basis: count all resources (including duplicates across subjects)
+            return getAllSubjectResources().size();
         }
     }
 
-    public void retainOverlaps(Map<String, Set<Object>> filterMap) {
-        var iterator = subjectResources.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<String, Set<Object>> entry = iterator.next();
-            String key = entry.getKey();
-            Set<Object> values = entry.getValue();
+    @Override
+    public String toString() {
+        String codeText = (code != null && code.text() != null) ? code.text() : "null";
+        String criteriaRef = (criteriaReference != null) ? criteriaReference : "null";
+        String aggMethod = (aggregateMethod != null) ? aggregateMethod.toString() : "null";
 
-            if (filterMap.containsKey(key)) {
-                // Retain only values also present in filterMap
-                values.retainAll(filterMap.get(key));
-            } else {
-                // If the key doesn't exist in filterMap, remove the entire entry
-                iterator.remove();
-                continue;
-            }
-
-            // If no values remain, remove the key
-            if (values.isEmpty()) {
-                iterator.remove();
-            }
-        }
+        return "PopulationDef{"
+                + "id='" + id + '\''
+                + ", code.text='" + codeText + '\''
+                + ", type=" + measurePopulationType
+                + ", expression='" + expression + '\''
+                + ", criteriaReference='" + criteriaRef + '\''
+                + ", aggregateMethod=" + aggMethod
+                + '}';
     }
 }

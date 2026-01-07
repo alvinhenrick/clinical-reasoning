@@ -2,6 +2,8 @@ package org.opencds.cqf.fhir.utility.adapter.dstu3;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -10,6 +12,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.server.exceptions.UnprocessableEntityException;
 import java.time.LocalDate;
 import java.util.Date;
@@ -22,16 +25,20 @@ import org.hl7.fhir.dstu3.model.RelatedArtifact;
 import org.hl7.fhir.dstu3.model.StructureDefinition;
 import org.hl7.fhir.dstu3.model.UriType;
 import org.junit.jupiter.api.Test;
+import org.opencds.cqf.fhir.utility.adapter.IAdapterFactory;
 import org.opencds.cqf.fhir.utility.adapter.IStructureDefinitionAdapter;
+import org.opencds.cqf.fhir.utility.adapter.IStructureDefinitionAdapterTest;
 import org.opencds.cqf.fhir.utility.adapter.TestVisitor;
 
-class StructureDefinitionAdapterTest {
+class StructureDefinitionAdapterTest implements IStructureDefinitionAdapterTest<StructureDefinition> {
     private final org.opencds.cqf.fhir.utility.adapter.IAdapterFactory adapterFactory = new AdapterFactory();
+    private final FhirContext fhirContext = FhirContext.forDstu3Cached();
 
     @Test
     void invalid_object_fails() {
         var library = new Library();
         assertThrows(IllegalArgumentException.class, () -> new StructureDefinitionAdapter(library));
+        assertNotNull(adapterFactory.createStructureDefinition(new StructureDefinition()));
     }
 
     @Test
@@ -107,7 +114,7 @@ class StructureDefinitionAdapterTest {
         structureDef.setDate(date);
         var adapter = adapterFactory.createKnowledgeArtifactAdapter(structureDef);
         assertEquals(date, adapter.getDate());
-        assertEquals(null, adapter.getApprovalDate());
+        assertNull(adapter.getApprovalDate());
         assertNotEquals(effectivePeriod, adapter.getEffectivePeriod());
         var newDate = new Date();
         newDate.setTime(100);
@@ -116,7 +123,7 @@ class StructureDefinitionAdapterTest {
         var newApprovalDate = new Date();
         newApprovalDate.setTime(100);
         adapter.setApprovalDate(newApprovalDate);
-        assertEquals(null, adapter.getApprovalDate());
+        assertNull(adapter.getApprovalDate());
         var newEffectivePeriod = new Period()
                 .setStart(java.sql.Date.valueOf(LocalDate.parse("2021-01-01")))
                 .setEnd(java.sql.Date.valueOf(LocalDate.parse("2021-12-31")));
@@ -175,19 +182,57 @@ class StructureDefinitionAdapterTest {
         var extractedDependencies = adapter.getDependencies();
         assertEquals(dependencies.size(), extractedDependencies.size());
         extractedDependencies.forEach(dep -> {
-            assertTrue(dependencies.indexOf(dep.getReference()) >= 0);
+            assertTrue(dependencies.contains(dep.getReference()));
         });
     }
 
     @Test
     void adapter_get_elements() {
-        var structureDef = new StructureDefinition();
-        structureDef.getDifferential().addElement().addType().setCode("String");
-        structureDef.getDifferential().addElement().addType().setCode("Quantity");
+        var baseDefinition = "http://hl7.org/fhir/Observation";
+        var structureDef = new StructureDefinition().setBaseDefinition(baseDefinition);
+        structureDef.getSnapshot().addElement().setPath("Observation");
+        structureDef.getSnapshot().addElement().setPath("Observation.id");
+        structureDef.getDifferential().addElement().setPath("Observation");
+        structureDef
+                .getDifferential()
+                .addElement()
+                .setPath("Observation.code")
+                .addType()
+                .setCode("String");
+        structureDef
+                .getDifferential()
+                .addElement()
+                .setPath("Observation.value")
+                .addType()
+                .setCode("Quantity");
         var adapter = (IStructureDefinitionAdapter) adapterFactory.createKnowledgeArtifactAdapter(structureDef);
+        assertTrue(adapter.hasSnapshot());
+        assertEquals(baseDefinition, adapter.getBaseDefinition().getValue());
         var snapshotElements = adapter.getSnapshotElements();
-        assertEquals(0, snapshotElements.size());
+        assertEquals(1, snapshotElements.size());
         var differentialElements = adapter.getDifferentialElements();
         assertEquals(2, differentialElements.size());
+    }
+
+    @Override
+    public Class<StructureDefinition> structureDefinitionClass() {
+        return StructureDefinition.class;
+    }
+
+    @Override
+    public FhirContext fhirContext() {
+        return fhirContext;
+    }
+
+    @Override
+    public IAdapterFactory getAdapterFactory() {
+        return adapterFactory;
+    }
+
+    @Override
+    public String toRelatedArtifactCanonicalReference(String ref) {
+        // dstu3 does not set canonical references as urls directly,
+        // but wraps them in a reference
+        return String.format("{\"reference\":\"%s\"}", ref);
     }
 }
